@@ -1,0 +1,7 @@
+- module-name: 'cloud_cluster'
+  dlls:
+    - from_filenames:
+        relative_path: '_native'
+        prefixes:
+          - 'librclone'
+      when: 'win32'

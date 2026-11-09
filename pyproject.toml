@@ -1,0 +1,40 @@
+[project]
+name = "cloud-cluster"
+version = "0.1.0"
+description = "여러 클라우드 계정을 하나로 묶어서 관리할 수 있는 파일 관리자"
+readme = "README.md"
+authors = [
+    { name = "joyfuI", email = "jong970105@gmail.com" }
+]
+requires-python = ">=3.15,<3.16"
+dependencies = ["PySide6-Essentials==6.12.0"]
+
+[project.scripts]
+cloud-cluster = "cloud_cluster:main"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest>=9,<10", "pytest-qt>=4.5,<5", "ruff>=0.14,<1"]
+deploy = ["Nuitka==4.3.4", "ordered-set>=4.1,<5"]
+
+[tool.ruff.lint]
+exclude = ["src/cloud_cluster/_vendor/*"]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+addopts = "--capture=sys"
+testpaths = ["tests"]
+pythonpath = ["src"]
+qt_api = "pyside6"
+markers = ["integration: explicit, isolated backend integration tests", "performance: large folder benchmarks"]
+
+[tool.ruff]
+target-version = "py315"
+line-length = 100
+
+[tool.uv.exclude-newer-package]
+# Only this pinned compiler patch bypasses the host's rolling package-age cutoff.
+nuitka = "2026-11-01T15:00:00Z"

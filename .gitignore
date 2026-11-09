@@ -1,0 +1,31 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local build and verification artifacts
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+src/cloud_cluster/_native/*.dll
+src/cloud_cluster/_native/*.dll~
+src/cloud_cluster/_native/*.h
+src/cloud_cluster/_native/build-info.json
+*.dist/
+*.build/
+*.onefile-build/
+/nuitka-crash-report.xml
+
+# Portable app data when running from source
+/settings.json
+/settings-*.tmp
+rclone.conf*
+/instance.lock
+/cloud-cluster.log*
+/content_hashes.db*
