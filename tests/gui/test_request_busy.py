@@ -346,11 +346,29 @@ def test_download_only_confirms_an_existing_target_in_the_latest_plan(
     complete(requests.pending[2])
     assert len(confirmations) == len(requests.queued) == 2
     retry, execute = requests.queued[-1]
+    row = window._task_rows[retry.id]
+    account = window.account_label(replica.account_id)
+    progress, result_details = [], []
+
+    def show_progress(stats):
+        retry.stats = stats
+        window.update_task(retry)
+        progress.append(row.text(2))
+
+    retry.state = "진행 중"
+    retry.context.progress = show_progress
     retry.result = execute(retry.context)
     retry.state = retry.result.outcome
     window.update_task(retry)
     assert retry.state == "완료"
     assert window.backend.nodes[target].data == b"same"
+    assert [detail.split(" · ")[0] for detail in progress] == ["공간 예약", "전송", "전송 검증"]
+    assert all(f" · {account} · /{replica.path}" in detail for detail in progress)
+    assert row.text(2) == f"전송 검증 · 1/1 · {account} · /{replica.path}"
+    monkeypatch.setattr(window_module, "show_text", lambda _, title, text: result_details.append(text))
+    window.task_details(retry)
+    for action in ("전송", "전송 검증"):
+        assert f"{action} · 완료 · {account}:/{replica.path}" in result_details[0]
 
 
 @pytest.mark.parametrize(

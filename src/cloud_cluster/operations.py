@@ -50,6 +50,10 @@ class CopyIntent:
     target: Endpoint
     previous: Replica | None
 
+    @property
+    def display_endpoint(self) -> Endpoint:
+        return self.source.endpoint if self.target.account_id == "local" else self.target
+
 
 @dataclass(frozen=True)
 class RenameIntent:
@@ -515,15 +519,19 @@ class OperationEngine:
             phase += f" write_result={write_result}"
         context.set_phase(phase)
 
-    def _describe(self, context, action, endpoint, size=None, *, source=None, write_result=None, note=""):
+    def _describe(
+        self, context, action, endpoint, size=None, *,
+        source=None, write_result=None, note="", display=None,
+    ):
         if context:
             self._phase(context, action, endpoint, source=source, write_result=write_result)
+            display = endpoint if display is None else display
             label = (
-                self.account(endpoint.account_id).label
-                if endpoint.account_id != "local"
+                self.account(display.account_id).label
+                if display.account_id != "local"
                 else "로컬"
             )
-            context.describe(" · ".join(filter(None, (action, label, note, f"/{endpoint.path}"))), size)
+            context.describe(" · ".join(filter(None, (action, label, note, f"/{display.path}"))), size)
 
     def plan_repair(self, entry, context=None):
         status = entry.assessment.status
@@ -814,6 +822,7 @@ class OperationEngine:
         while True:
             context.check()
             target = copy.target
+            display = copy.display_endpoint
             label = self.account(target.account_id).label if target.account_id != "local" else "로컬"
             with ExitStack() as stack:
                 reservation = held
@@ -829,7 +838,8 @@ class OperationEngine:
                             raise CopyRejected(error.kind) from None
                     action = "대체 업로드" if reason else "전송"
                     self._describe(
-                        context, f"{action} · {position}", target, copy.source.version.size, note=reason
+                        context, f"{action} · {position}", target, copy.source.version.size,
+                        note=reason, display=display,
                     )
                     # A final preflight rejection proves no write only on the first attempt.
                     single_attempt = (
@@ -860,7 +870,7 @@ class OperationEngine:
                     )
                     return
                 results.append(
-                    StepResult(target.account_id, target.path, "대체 업로드" if reason else "전송", "ok", reason)
+                    StepResult(display.account_id, display.path, action, "ok", reason)
                 )
                 self._describe(
                     context,
@@ -868,11 +878,12 @@ class OperationEngine:
                     target,
                     write_result="reported_success",
                     note=reason,
+                    display=display,
                 )
                 verified = self._verify(
                     copy.source, target, context, precise=bool(copy.previous or precise)
                 )
-                results.append(StepResult(target.account_id, target.path, "전송 검증", "ok"))
+                results.append(StepResult(display.account_id, display.path, "전송 검증", "ok"))
                 return verified
 
     def preflight(self, plan, context):
@@ -898,7 +909,10 @@ class OperationEngine:
             )
             self.assert_expected(source, context, directories=directories)
         for index, copy in enumerate(targets, 1):
-            self._describe(context, f"실행 전 대상 확인 · {index}/{len(targets)}", copy.target)
+            self._describe(
+                context, f"실행 전 대상 확인 · {index}/{len(targets)}", copy.target,
+                display=copy.display_endpoint,
+            )
             self._check_copy_target(copy, context, directories=directories)
         for index, item in enumerate(plan.deletions, 1):
             if (item.endpoint, item.version.fingerprint) in sources:
@@ -1151,10 +1165,10 @@ class OperationEngine:
             else:
                 replaced_targets = {}
                 for index, (account_id, size) in enumerate(sorted(amounts.items()), 1):
-                    target = next(c.target for c in plan.copies if c.target.account_id == account_id)
+                    copy = next(c for c in plan.copies if c.target.account_id == account_id)
                     action = "대체 대상 공간 확인" if note else f"공간 예약 · {index}/{len(amounts)}개 계정"
-                    self._describe(context, action, target, note=note)
-                    self._reserve_space(target, size, held)
+                    self._describe(context, action, copy.target, note=note, display=copy.display_endpoint)
+                    self._reserve_space(copy.target, size, held)
             yield plan, held, replaced_targets
         finally:
             with self._guard:
