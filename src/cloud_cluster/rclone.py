@@ -119,6 +119,7 @@ def _debug_rc_error(method, trace, job, message):
     if (
         logger.isEnabledFor(logging.DEBUG)
         and method.startswith(("operations/", "cloudcluster/"))
+        and method != "operations/cleanup"
         and "oauth2:" not in message.lower()
     ):
         # shortcut: masks recognizable credential formats, extend when a backend adds another one
@@ -300,7 +301,11 @@ class RcloneAdapter:
             features.get("Copy", False),
             features.get("Move", False),
             features.get("About", False),
+            trash_cleanup=features.get("CleanUp") is True,
         )
+
+    def empty_trash(self, account, context):
+        self.run("operations/cleanup", context, fs=account.fs)
 
     def about(self, account, context=None):
         result = self.run("operations/about", context, fs=account.fs)

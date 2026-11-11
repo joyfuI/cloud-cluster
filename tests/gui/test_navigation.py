@@ -320,9 +320,7 @@ def test_task_refresh_keeps_cached_rows_until_their_account_responds(
         window.close()
 
 
-def test_work_paths_in_normal_navigation_and_unsupported_trash_wording(
-    qtbot, monkeypatch, backend, accounts, tmp_path
-):
+def test_work_paths_in_normal_navigation(qtbot, backend, accounts, tmp_path):
     account = replace(accounts[0], provider="s3")
     preserved = ".cc-preserved-" + "a" * 32 + "-file.txt"
     stage = ".cc-stage-" + "b" * 32 + "-folder"
@@ -331,8 +329,6 @@ def test_work_paths_in_normal_navigation_and_unsupported_trash_wording(
     window = MainWindow(backend, Settings(accounts=[account]), SettingsStore(tmp_path / "ui"))
     qtbot.addWidget(window)
     window.show()
-    messages = []
-    monkeypatch.setattr(window_module, "message", lambda parent, text: messages.append(text))
     try:
         qtbot.waitUntil(lambda: window.snapshot is not None and not window.workers.pending)
         assert {
@@ -341,9 +337,9 @@ def test_work_paths_in_normal_navigation_and_unsupported_trash_wording(
         } == {preserved, stage, "file.txt"}
         unified = window.tree_model.index(0, 0)
         assert window.tree_model.index(0, 0, unified).data() == stage
-        assert "작업 보존본" not in {node.label for node in window.tree_model.root.children}
-        window.open_trash(account.id)
-        assert messages == ["이 계정은 휴지통 조회를 지원하지 않습니다."]
+        assert [node.label for node in window.tree_model.root.children] == [
+            "통합 클라우드", "연결된 계정", "문제 항목"
+        ]
     finally:
         qtbot.waitUntil(lambda: not window.workers.pending)
         window._shutdown_done = True

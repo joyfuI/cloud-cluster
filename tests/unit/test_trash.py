@@ -1,37 +1,59 @@
 from dataclasses import replace
+from unittest.mock import Mock, call
 
 import pytest
 
-from cloud_cluster.trash import GoogleTrashAdapter, TrashItem, capabilities
+from cloud_cluster.accounts import AccountManager
+from cloud_cluster.domain import BackendError, CloudAccount, ErrorKind
+from cloud_cluster.rclone import RcloneAdapter
+from cloud_cluster.settings import Settings
+from cloud_cluster.transfers import TaskContext
 
 
-def test_unsupported_provider_has_web_only(accounts):
-    account = replace(accounts[0], provider="onedrive")
-    cap = capabilities(account)
-    assert cap.web_url.startswith("https://") and not cap.list_items and not cap.restore_item
+@pytest.mark.parametrize("provider", ["drive", "box", "jottacloud", "pikpak", "pcloud"])
+def test_empty_trash_only_calls_native_cleanup_for_the_approved_remote(provider):
+    account = CloudAccount("target", "target", provider, root="selected-folder")
+    adapter = RcloneAdapter.__new__(RcloneAdapter)
+    adapter.rpc = Mock(return_value={"type": provider})
+    adapter.run = Mock(side_effect=[{"Features": {"CleanUp": True}}, {}])
+    manager = AccountManager(adapter, None, Settings(accounts=[account]))
+    context = TaskContext()
+
+    assert manager.empty_trash(account, context).outcome == "완료"
+    assert adapter.run.call_args_list == [
+        call("operations/fsinfo", context, fs=account.fs),
+        call("operations/cleanup", context, fs=account.fs),
+    ]
 
 
-def test_google_restore_blocks_existing_case_variant(backend, accounts):
-    adapter = GoogleTrashAdapter(backend, accounts[0])
-    item = TrashItem("deleted", "X.txt", "root/X.txt", None, False, "parent")
-    calls = []
+@pytest.mark.parametrize(
+    "restriction", ["onedrive", "b2", "changed", "disabled", "readonly", "no-feature"]
+)
+def test_empty_trash_checks_provider_and_remote_state_before_writing(restriction):
+    provider = restriction if restriction in {"onedrive", "b2"} else "pcloud"
+    account = CloudAccount("target", "target", provider)
+    saved_account = replace(account, enabled=False) if restriction == "disabled" else account
+    if restriction == "readonly":
+        account = saved_account = replace(account, readonly=True)
+    adapter = RcloneAdapter.__new__(RcloneAdapter)
+    adapter.rpc = Mock(return_value={"type": "onedrive" if restriction == "changed" else provider})
+    adapter.run = Mock(return_value={"Features": {"CleanUp": restriction != "no-feature"}})
+    manager = AccountManager(adapter, None, Settings(accounts=[saved_account]))
 
-    def request(suffix="", *, params=None, body=None, context=None):
-        calls.append((suffix, body))
-        if suffix:
-            return {"id": "deleted", "name": "X.txt", "parents": ["parent"], "trashed": True}
-        return {"files": [{"name": "x.TXT"}]}
-
-    adapter._request = request
     with pytest.raises(ValueError):
-        adapter.restore(item, approved=True)
-    assert not any(body for _, body in calls)
+        manager.empty_trash(account, TaskContext())
+    assert all(args[0] == "operations/fsinfo" for args, _ in adapter.run.call_args_list)
 
 
-def test_google_restore_requires_approval_and_known_path(backend, accounts):
-    adapter = GoogleTrashAdapter(backend, accounts[0])
-    item = TrashItem("deleted", "x", None, None, False)
-    with pytest.raises(PermissionError):
-        adapter.restore(item)
-    with pytest.raises(ValueError):
-        adapter.restore(item, approved=True)
+@pytest.mark.parametrize("kind", [ErrorKind.NETWORK, ErrorKind.CANCELLED])
+def test_empty_trash_reports_uncertain_result_without_retrying(kind):
+    account = CloudAccount("target", "target", "box")
+    adapter = RcloneAdapter.__new__(RcloneAdapter)
+    adapter.rpc = Mock(return_value={"type": "box"})
+    adapter.run = Mock(side_effect=[{"Features": {"CleanUp": True}}, BackendError(kind)])
+    manager = AccountManager(adapter, None, Settings(accounts=[account]))
+
+    result = manager.empty_trash(account, TaskContext())
+    assert result.outcome == "실패 / 결과 확인 필요"
+    assert "웹 휴지통" in result.steps[0].message
+    assert adapter.run.call_count == 2

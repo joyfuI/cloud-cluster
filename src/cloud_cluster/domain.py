@@ -78,6 +78,7 @@ class BackendCapabilities:
     server_move: bool = False
     quota: bool = False
     max_file_size: int | None = None
+    trash_cleanup: bool = False
 
 
 @dataclass(frozen=True)

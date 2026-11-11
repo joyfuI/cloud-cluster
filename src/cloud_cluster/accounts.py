@@ -3,7 +3,7 @@
 from dataclasses import replace
 from threading import RLock
 
-from .domain import CloudAccount
+from .domain import BackendError, CloudAccount, OperationResult, StepResult
 from .quota import QuotaCache
 from .replicas import validate_remote_name
 
@@ -18,6 +18,8 @@ READ_WRITE_PARAMETERS = {
     "hidrive": {"scope_access": "rw"},
     "google photos": {"read_only": "false"},
 }
+# Other CleanUp backends can delete file versions instead of trash.
+TRASH_CLEANUP_PROVIDERS = {"drive", "box", "jottacloud", "pikpak", "pcloud"}
 
 
 class AccountManager:
@@ -112,6 +114,35 @@ class AccountManager:
 
     def quota(self, account, context=None):
         return self.quotas.get(account, context, force=True)
+
+    def supports_empty_trash(self, account, context):
+        return (
+            account.provider in TRASH_CLEANUP_PROVIDERS
+            and self.backend.features(account, context).trash_cleanup
+        )
+
+    def empty_trash(self, account, context):
+        with self._lock:
+            context.check()
+            if account not in self.settings.accounts or not account.enabled or account.readonly:
+                raise ValueError("계정 상태가 변경되었거나 쓰기 가능한 계정이 아닙니다.")
+            name = validate_remote_name(account.remote)
+            if self.backend.rpc("config/get", name=name).get("type") != account.provider:
+                raise ValueError("리모트 설정이 변경되었습니다. 계정 설정을 다시 확인하세요.")
+            if not self.supports_empty_trash(account, context):
+                raise ValueError("현재 계정 설정에서 휴지통 비우기를 사용할 수 없습니다.")
+            action = "휴지통 비우기"
+            context.check()
+            try:
+                self.backend.empty_trash(account, context)
+            except BackendError as error:
+                context.record_failure(error)
+                step = StepResult(
+                    account.id, "", action, "error", f"{error} · 웹 휴지통에서 결과를 확인하세요."
+                )
+            else:
+                step = StepResult(account.id, "", action, "ok")
+            return OperationResult(action, (step,))
 
     def delete(self, remote):
         validate_remote_name(remote)

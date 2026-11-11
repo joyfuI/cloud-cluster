@@ -12,10 +12,9 @@ from PySide6.QtCore import (
     QPersistentModelIndex,
     Qt,
     QTimer,
-    QUrl,
     Signal,
 )
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -34,8 +33,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStyle,
-    QTableWidget,
-    QTableWidgetItem,
     QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
@@ -56,8 +53,6 @@ from ..domain import (
 from ..operations import CopyIntent, ExpectedItem, MutationPlan, OperationEngine, local_endpoint
 from ..replicas import choose_accounts, is_excluded, path_key, path_keys_overlap, validate_path
 from ..transfers import TransferManager
-from ..trash import GoogleTrashAdapter
-from ..trash import capabilities as trash_capabilities
 from ..verification import VerificationStore
 from ..vfs import VirtualFileSystem
 from .dialogs import (
@@ -143,7 +138,7 @@ class MainWindow(QMainWindow):
         self._pending_plans = {}
         self._last_auto_download_account = ""
         self._pending_repairs = {}
-        self._trash_loading, self._restore_pending, self._restore_tasks = set(), set(), {}
+        self._trash_tasks = {}
         self._refreshing = None
         self._task_rechecks = []
         self._task_browse_request = None
@@ -497,6 +492,11 @@ class MainWindow(QMainWindow):
         )
 
     def endpoints_busy(self, endpoints):
+        if self._trash_tasks:
+            endpoints = tuple(endpoints)
+            trash_accounts = {account.id for account in self._trash_tasks.values()}
+            if trash_accounts.intersection(e.account_id for e in endpoints):
+                return True
         requested = {(e.fs.casefold(), path_key(e.path)) for e in endpoints}
         active = {(e.fs.casefold(), path_key(e.path)) for e in self.busy_endpoints()}
         return any(
@@ -806,8 +806,6 @@ class MainWindow(QMainWindow):
                 if self.scan_path is not None
                 else "현재 폴더의 문제 항목입니다. 하위 폴더까지 보려면 현재 폴더 검사를 실행하세요."
             )
-        elif node.kind == "trash":
-            self.open_trash(node.scope)
 
     def load_tree(self, node):
         if self.vfs is None:
@@ -2553,9 +2551,15 @@ class MainWindow(QMainWindow):
         ):
             self._reported_tasks.add(task.id)
             logger.info("task result received task=%s state=%s", task.id, task.state)
-            restore_key = self._restore_tasks.pop(task.id, None)
-            if restore_key is not None:
-                self._restore_pending.discard(restore_key)
+            trash_account = self._trash_tasks.pop(task.id, None)
+            if trash_account is not None:
+                self._finished_tasks.add(task.id)
+                if self._account_dialog is not None:
+                    self._account_dialog.status.setText(f"{task.label} · {task.state}")
+                if isinstance(task.result, OperationResult):
+                    self.refresh_account_quota(trash_account)
+                self.update_command_buttons()
+                return
             if self._scan_run is not None and task.id in self._scan_run.pending:
                 self._finished_tasks.add(task.id)
                 self.finish_scan_folder(task)
@@ -2734,6 +2738,7 @@ class MainWindow(QMainWindow):
             self.account_manager,
             self,
             changes_available=lambda: self.configuration_available(notify=False),
+            empty_trash=self.enqueue_empty_trash,
         )
         self._accounts_dirty = False
         dialog.changed.connect(lambda: setattr(self, "_accounts_dirty", True))
@@ -2748,6 +2753,33 @@ class MainWindow(QMainWindow):
             self.accounts_changed()
         else:
             self.update_capacity_label()
+
+    def enqueue_empty_trash(self, account):
+        if not self.configuration_available(notify=False):
+            raise ValueError("진행 중인 작업이 끝난 뒤 휴지통을 비울 수 있습니다.")
+        task = self.transfers.submit(
+            f"휴지통 비우기 · {account.label}",
+            lambda context: self.account_manager.empty_trash(account, context),
+            queue="other",
+        )
+        self._trash_tasks[task.id] = account
+
+    def refresh_account_quota(self, account):
+        def done(quota, error=""):
+            if self._closing:
+                return
+            if self._account_dialog is not None:
+                self._account_dialog.quota_ready(account.id, quota, error)
+            self.update_capacity_label()
+
+        try:
+            self.workers.submit(
+                lambda context: self.account_manager.quota(account, context),
+                done,
+                lambda error: done(None, error),
+            )
+        except Exception as error:
+            done(None, str(error))
 
     def accounts_changed(self):
         self.vfs.accounts = list(self.settings.accounts)
@@ -2816,122 +2848,6 @@ class MainWindow(QMainWindow):
         if self.vfs:
             self.vfs.cache.ttl = updated.cache_ttl
         logger.setLevel(updated.log_level)
-
-    def open_trash(self, account_id):
-        if account_id in self._trash_loading:
-            return
-        if not self.available():
-            return
-        account = next(a for a in self.settings.accounts if a.id == account_id)
-        cap = trash_capabilities(account)
-        if not cap.list_items:
-            if cap.web_url:
-                QDesktopServices.openUrl(QUrl(cap.web_url))
-            else:
-                message(self, "이 계정은 휴지통 조회를 지원하지 않습니다.")
-            return
-        adapter = GoogleTrashAdapter(self.backend, account)
-        self._trash_loading.add(account_id)
-
-        def done(items):
-            try:
-                if not self._closing:
-                    self.trash_dialog(adapter, items, cap)
-            finally:
-                self._trash_loading.discard(account_id)
-
-        def failed(error):
-            try:
-                if not self._closing:
-                    message(self, error)
-            finally:
-                self._trash_loading.discard(account_id)
-
-        try:
-            self.workers.submit(lambda context: adapter.list_items(context), done, failed)
-        except Exception as error:
-            failed(error)
-
-    def trash_dialog(self, adapter, items, cap):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("휴지통 · " + adapter.account.label)
-        dialog.resize(850, 460)
-        layout = QVBoxLayout(dialog)
-        table = QTableWidget(len(items), 3)
-        table.setWordWrap(False)
-        table.setHorizontalHeaderLabels(["이름", "원래 경로", "삭제 시각"])
-        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        for row, item in enumerate(items):
-            for column, value in enumerate(
-                (item.name, item.original_path or "알 수 없음", item.deleted_at or "알 수 없음")
-            ):
-                table.setItem(row, column, QTableWidgetItem(value))
-        table.horizontalHeader().setStretchLastSection(True)
-        table.resizeColumnsToContents()
-        layout.addWidget(table)
-        buttons = QHBoxLayout()
-        restore = QPushButton("선택 항목 복원...")
-
-        def update_restore(*args):
-            row = table.currentRow()
-            restore.setEnabled(
-                cap.restore_item
-                and row >= 0
-                and (adapter.account.id, items[row].id) not in self._restore_pending
-            )
-
-        table.itemSelectionChanged.connect(update_restore)
-        update_restore()
-
-        def run_restore():
-            row = table.currentRow()
-            if row < 0 or not cap.restore_item or self._closing:
-                return
-            item = items[row]
-            key = (adapter.account.id, item.id)
-            if key in self._restore_pending:
-                return
-            self._restore_pending.add(key)
-            update_restore()
-            task = None
-            try:
-                if (
-                    not confirm(
-                        dialog,
-                        "선택 항목 복원",
-                        f"{item.original_path or item.name}\n충돌이 있으면 복원하지 않습니다.",
-                    )
-                    or self._closing
-                ):
-                    return
-                task = self.transfers.submit(
-                    "선택 항목 복원",
-                    lambda context: adapter.restore(item, context, approved=True),
-                    queue="other",
-                )
-                self._restore_tasks[task.id] = key
-                dialog.accept()
-            except Exception as error:
-                if not self._closing:
-                    message(dialog, error)
-            finally:
-                if task is None:
-                    self._restore_pending.discard(key)
-                    update_restore()
-
-        restore.clicked.connect(run_restore)
-        web = QPushButton("웹 휴지통")
-        web.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(cap.web_url)))
-        buttons.addWidget(restore)
-        buttons.addWidget(web)
-        layout.addLayout(buttons)
-        self.task_changed.connect(update_restore)
-        try:
-            dialog.exec()
-        finally:
-            self.task_changed.disconnect(update_restore)
 
     def closeEvent(self, event):
         if self._shutdown_done:

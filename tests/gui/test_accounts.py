@@ -10,12 +10,89 @@ from cloud_cluster.domain import (
     BackendCapabilities,
     BackendError,
     CloudAccount,
+    Endpoint,
     ErrorKind,
     QuotaSnapshot,
 )
 from cloud_cluster.gui import dialogs
 from cloud_cluster.gui.dialogs import AccountDialog, AuthDialog, SettingsDialog
+from cloud_cluster.gui.window import MainWindow
 from cloud_cluster.settings import Settings, SettingsStore
+
+
+def test_empty_trash_from_account_management(qtbot, monkeypatch, backend, tmp_path):
+    drive = CloudAccount("drive", "drive-test", "drive")
+    onedrive = CloudAccount("one", "one-test", "onedrive")
+    pcloud = CloudAccount("pcloud", "pcloud-test", "pcloud")
+    settings = Settings(accounts=[drive, onedrive, pcloud])
+    store = SettingsStore(tmp_path / "ui")
+    manager = AccountManager(backend, store, settings)
+    started, release = Event(), Event()
+    calls, prompts = [], []
+
+    def cleanup(account, context):
+        calls.append(account)
+        started.set()
+        assert release.wait(5)
+
+    def confirm(parent, title, details, prompt):
+        prompts.append(details)
+        return len(prompts) > 1
+
+    monkeypatch.setattr(backend, "rpc", lambda *args, **kw: {"type": "drive"}, raising=False)
+    monkeypatch.setattr(backend, "empty_trash", cleanup, raising=False)
+    monkeypatch.setattr(
+        backend, "features",
+        lambda account, context: BackendCapabilities(quota=True, trash_cleanup=account != pcloud),
+    )
+    monkeypatch.setattr(
+        backend, "about",
+        lambda account, context: QuotaSnapshot(
+            4096, 2048 if account == drive and release.is_set() else 1024
+        ),
+    )
+    monkeypatch.setattr(dialogs, "confirm", confirm)
+    window = MainWindow(backend, settings, store, manager)
+    qtbot.addWidget(window)
+    window.show()
+
+    def interact(dialog):
+        qtbot.waitUntil(lambda: not dialog.quota_workers.pending)
+        button = dialog.empty_trash_button
+        for row in (1, 2):
+            dialog.table.selectRow(row)
+            assert not button.isEnabled()
+        dialog.table.selectRow(0)
+        assert button.isEnabled()
+        button.click()
+        assert not window.transfers.tasks
+        button.click()
+        qtbot.waitUntil(started.is_set)
+        assert not button.isEnabled()
+        button.clicked.emit()
+        assert len(window.transfers.tasks) == 1
+        assert window.endpoints_busy(iter([Endpoint(drive.fs, "file", drive.id)]))
+        assert not window.endpoints_busy(iter([Endpoint(onedrive.fs, "file", onedrive.id)]))
+        release.set()
+        qtbot.waitUntil(lambda: dialog.table.item(0, 4).text() == "2.0 KB")
+        qtbot.waitUntil(button.isEnabled)
+        assert not window._trash_tasks
+        assert next(iter(window.transfers.tasks.values())).state == "완료"
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(AccountDialog, "exec", interact)
+    try:
+        qtbot.waitUntil(lambda: window.snapshot is not None and not window.workers.pending)
+        window.accounts_dialog()
+        assert calls == [drive]
+        assert all(drive.label in text and "영구 삭제" in text for text in prompts)
+    finally:
+        release.set()
+        qtbot.waitUntil(lambda: not window.transfers.busy and not window.workers.pending)
+        window._shutdown_done = True
+        window.vfs.close()
+        window.transfers.close()
+        window.close()
 
 
 def test_account_buttons_disable_during_provider_lookup_and_recover(qtbot, monkeypatch):

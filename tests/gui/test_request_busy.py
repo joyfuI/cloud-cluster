@@ -13,8 +13,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLabel,
-    QPushButton,
-    QTableWidget,
     QTextEdit,
 )
 
@@ -24,7 +22,6 @@ from cloud_cluster.gui.dialogs import confirm
 from cloud_cluster.gui.window import MainWindow
 from cloud_cluster.settings import Settings, SettingsStore
 from cloud_cluster.transfers import TaskContext, TransferTask
-from cloud_cluster.trash import TrashItem, capabilities
 
 
 @pytest.fixture
@@ -1362,74 +1359,6 @@ def test_upload_preparation_progress_and_cancel_ignore_late_result(
     assert not requests.queued and not requests.prompts and not requests.errors
 
 
-@pytest.mark.parametrize("ending", ["done", "failed", "start", "closing"])
-def test_trash_list_does_not_queue_twice_or_reopen_after_close(requests, monkeypatch, ending):
-    window = requests.window
-    shown = []
-    monkeypatch.setattr(
-        window_module,
-        "GoogleTrashAdapter",
-        lambda *args: SimpleNamespace(list_items=lambda context: []),
-    )
-    monkeypatch.setattr(window, "trash_dialog", lambda *args: shown.append(args))
-    if ending == "start":
-        monkeypatch.setattr(window.workers, "submit", cannot_start)
-    window.open_trash("a")
-    if ending != "start":
-        window.open_trash("a")
-        assert len(requests.pending) == 1
-        if ending == "failed":
-            requests.pending[0][2]("list failed")
-        else:
-            if ending == "closing":
-                window._closing = True
-            complete(requests.pending[0])
-    assert not window._trash_loading
-    assert bool(shown) == (ending == "done")
-
-
-def test_restore_guard_survives_reopening_and_reenables_on_completion(
-    requests, monkeypatch, accounts
-):
-    window = requests.window
-    item = TrashItem("deleted", "x", "x", None, False)
-    adapter = SimpleNamespace(account=accounts[0])
-    dialogs = []
-
-    def interact(dialog):
-        table = dialog.findChild(QTableWidget)
-        button = next(
-            b for b in dialog.findChildren(QPushButton) if b.text() == "선택 항목 복원..."
-        )
-        assert not button.isEnabled()
-        table.selectRow(0)
-        dialogs.append(dialog)
-        if len(dialogs) == 1:
-
-            def confirm(*args):
-                button.clicked.emit()
-                return True
-
-            monkeypatch.setattr(window_module, "confirm", confirm)
-            button.click()
-            assert len(requests.queued) == 1
-        else:
-            assert not button.isEnabled()
-            button.clicked.emit()
-            assert len(requests.queued) == 1
-            task = requests.queued[0][0]
-            task.state = "완료"
-            window.task_changed.emit(task)
-            assert button.isEnabled()
-        return QDialog.DialogCode.Rejected
-
-    monkeypatch.setattr(QDialog, "exec", interact)
-    window.trash_dialog(adapter, [item], capabilities(accounts[0]))
-    assert window._restore_pending
-    window.trash_dialog(adapter, [item], capabilities(accounts[0]))
-    assert not window._restore_pending
-
-
 def test_completed_close_ignores_repeated_shutdown_callbacks(requests):
     requests.window._shutdown_done = True
     requests.window.finish_close()
@@ -1451,31 +1380,6 @@ def test_read_request_start_failure_releases_every_guard(requests, monkeypatch, 
         monkeypatch.setattr(window, "choose_replica", lambda entry: entry.replicas[0])
         window.table.doubleClicked.emit(window.proxy.index(0, 0))
         assert not window._preparing and not requests.queued
-
-
-@pytest.mark.parametrize("ending", ["cancel", "submit"])
-def test_restore_without_registration_releases_item_guard(requests, monkeypatch, accounts, ending):
-    window = requests.window
-    item = TrashItem("deleted", "x", "x", None, False)
-    adapter = SimpleNamespace(account=accounts[0])
-    if ending == "cancel":
-        monkeypatch.setattr(window_module, "confirm", lambda *args: False)
-    else:
-        monkeypatch.setattr(window.transfers, "submit", cannot_start)
-
-    def interact(dialog):
-        table = dialog.findChild(QTableWidget)
-        table.selectRow(0)
-        button = next(
-            b for b in dialog.findChildren(QPushButton) if b.text() == "선택 항목 복원..."
-        )
-        button.click()
-        assert not window._restore_pending and button.isEnabled()
-        return QDialog.DialogCode.Rejected
-
-    monkeypatch.setattr(QDialog, "exec", interact)
-    window.trash_dialog(adapter, [item], capabilities(accounts[0]))
-    assert not requests.queued
 
 
 def test_issue_selection_tracks_conflicting_queued_paths(requests, backend, accounts):

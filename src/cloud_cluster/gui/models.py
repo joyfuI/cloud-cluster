@@ -183,7 +183,6 @@ class FolderTreeModel(QAbstractItemModel):
         root = FolderNode("root", loaded=True)
         unified = FolderNode("통합 클라우드", kind="unified", parent=root)
         cloud_group = FolderNode("연결된 계정", kind="group", parent=root, loaded=True)
-        trash_group = FolderNode("클라우드 휴지통", kind="group", parent=root, loaded=True)
         for account in accounts:
             suffix = " (사용 안 함)" if not account.enabled else ""
             cloud_group.children.append(
@@ -191,16 +190,10 @@ class FolderTreeModel(QAbstractItemModel):
                     account.label + suffix, kind="account", scope=account.id, parent=cloud_group
                 )
             )
-            trash_group.children.append(
-                FolderNode(
-                    account.label, kind="trash", scope=account.id, parent=trash_group, loaded=True
-                )
-            )
         root.children = [
             unified,
             cloud_group,
             FolderNode("문제 항목", kind="issues", parent=root, loaded=True),
-            trash_group,
         ]
         self.root = root
         self.endResetModel()
@@ -252,11 +245,7 @@ class FolderTreeModel(QAbstractItemModel):
         if role == Qt.ItemDataRole.UserRole:
             return node
         if role == Qt.ItemDataRole.DecorationRole:
-            return QApplication.style().standardIcon(
-                QStyle.StandardPixmap.SP_TrashIcon
-                if node.kind == "trash"
-                else QStyle.StandardPixmap.SP_DirIcon
-            )
+            return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         return None
 
     def canFetchMore(self, parent):

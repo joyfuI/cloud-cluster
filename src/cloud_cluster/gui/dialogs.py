@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..accounts import TRASH_CLEANUP_PROVIDERS
 from ..domain import Status
 from .models import size_text
 from .rclone_help_ko import AUTH_DATA_CHOICES, AUTH_LABELS_KO, translate_auth_text
@@ -135,13 +136,15 @@ def _confirmation_dialog(parent, title, details, prompt):
 class AccountDialog(QDialog):
     changed = Signal()
 
-    def __init__(self, manager, parent=None, *, changes_available=lambda: True):
+    def __init__(self, manager, parent=None, *, changes_available=lambda: True, empty_trash=None):
         super().__init__(parent)
         self.manager = manager
         self.changes_available = changes_available
+        self.submit_empty_trash = empty_trash
         self.workers = WorkerPool(self)
         self.quota_workers = WorkerPool(self)
         self.quotas = {}
+        self.trash_support = {}
         self.setWindowTitle("계정 관리")
         self.resize(760, 430)
         layout = QVBoxLayout(self)
@@ -170,6 +173,9 @@ class AccountDialog(QDialog):
                 self.toggle_button = button
             else:
                 self.account_buttons.append(button)
+        self.empty_trash_button = QPushButton("휴지통 비우기...")
+        self.empty_trash_button.clicked.connect(self.empty_trash)
+        buttons.addWidget(self.empty_trash_button)
         self.table.itemSelectionChanged.connect(self.update_account_buttons)
         self.workers.busy_changed.connect(self.update_account_buttons)
         self.quota_workers.busy_changed.connect(self.update_account_buttons)
@@ -189,6 +195,18 @@ class AccountDialog(QDialog):
     def reload(self):
         self.table.setRowCount(len(self.manager.settings.accounts))
         for row, account in enumerate(self.manager.settings.accounts):
+            if (
+                self.submit_empty_trash is not None
+                and account.provider in TRASH_CLEANUP_PROVIDERS
+                and account.id not in self.trash_support
+            ):
+                self.trash_support[account.id] = False
+                self.quota_workers.submit(
+                    lambda context, account=account: self.manager.supports_empty_trash(account, context),
+                    lambda supported, account_id=account.id: self.trash_support.update(
+                        {account_id: supported}
+                    ),
+                )
             if account.id not in self.quotas:
                 self.quotas[account.id] = None
                 self.quota_workers.submit(
@@ -244,6 +262,9 @@ class AccountDialog(QDialog):
         for button in self.account_buttons:
             button.setEnabled(config_edit_available)
         account = self.selected()
+        self.empty_trash_button.setEnabled(
+            config_edit_available and self.can_empty_trash(account)
+        )
         self.toggle_button.setEnabled(account is not None and idle)
         self.toggle_button.setText(
             "사용 여부 변경"
@@ -259,6 +280,33 @@ class AccountDialog(QDialog):
             and not self.quota_workers.pending
             and self.changes_available()
         )
+
+    def can_empty_trash(self, account):
+        return bool(
+            account and account.enabled and not account.readonly and self.trash_support.get(account.id)
+        )
+
+    def empty_trash(self):
+        account = self.selected()
+        if not self.config_edit_available() or not self.can_empty_trash(account):
+            return
+        details = (
+            f"{account.label} · {account.provider}\n\n"
+            "이 리모트의 휴지통 항목을 영구 삭제합니다. 앱 밖에서 삭제한 항목과 "
+            "앱 관리 폴더 밖의 항목도 포함될 수 있습니다. 삭제 후 복구할 수 없습니다."
+        )
+        if account.provider == "pcloud":
+            details += "\n\npCloud는 rclone에 설정된 사용자 이름과 비밀번호로 인증한 계정의 휴지통을 비웁니다."
+        if not confirm(self, "휴지통 비우기", details, "휴지통을 비우시겠습니까?"):
+            return
+        if not self.config_edit_available() or account != self.selected():
+            return
+        try:
+            self.submit_empty_trash(account)
+        except Exception as error:
+            message(self, error)
+        else:
+            self.status.setText("휴지통 비우기를 등록했습니다. 작업 목록에서 진행 상태를 확인하세요.")
 
     def create(self):
         if not self.config_edit_available():
@@ -284,6 +332,7 @@ class AccountDialog(QDialog):
                 except (ValueError, OSError) as error:
                     message(self, error)
             self.quotas.clear()
+            self.trash_support.clear()
             self.reload()
             self.changed.emit()
 
