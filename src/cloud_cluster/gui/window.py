@@ -479,7 +479,7 @@ class MainWindow(QMainWindow):
         return (
             *(endpoint for plan in self._pending_plans.values() for endpoint in plan.endpoints),
             *self.entry_endpoints(self._pending_repairs.values()),
-            *(endpoint for targets in self._delete_targets.values() for endpoint in targets),
+            *(endpoint for targets, _ in self._delete_targets.values() for endpoint in targets),
             *self._verification_targets,
         )
 
@@ -492,11 +492,6 @@ class MainWindow(QMainWindow):
         )
 
     def endpoints_busy(self, endpoints):
-        if self._trash_tasks:
-            endpoints = tuple(endpoints)
-            trash_accounts = {account.id for account in self._trash_tasks.values()}
-            if trash_accounts.intersection(e.account_id for e in endpoints):
-                return True
         requested = {(e.fs.casefold(), path_key(e.path)) for e in endpoints}
         active = {(e.fs.casefold(), path_key(e.path)) for e in self.busy_endpoints()}
         return any(
@@ -894,19 +889,15 @@ class MainWindow(QMainWindow):
         if execute is None:
             def execute(context):
                 return self.engine.execute(plan, context, approved=True)
+        endpoints = plan.write_endpoints
         task = self.transfers.submit(
             plan.label,
             execute,
             after=after,
+            wait_for=self.trash_predecessors(e.account_id for e in endpoints),
             queue="transfer" if plan.copies or plan.renames else "other",
         )
         account_ids = {a.id for a in self.settings.accounts}
-        endpoints = (
-            *plan.mkdirs,
-            *(copy.target for copy in (*plan.copies, *plan.alternates)),
-            *(item.target for item in plan.renames),
-            *(item.endpoint for item in (*plan.deletions, *plan.rmdirs)),
-        )
         issue_keys = {path_key(e.path) for e in endpoints if e.account_id in account_ids}
         retry = None
         if builder is not None:
@@ -1475,6 +1466,10 @@ class MainWindow(QMainWindow):
                             f"{action} · /{entry.path}",
                             lambda context, entry=entry: self.repair_issue(entry, context),
                             after=tuple(after),
+                            wait_for=tuple(
+                                task_id for task_id, account in self._trash_tasks.items()
+                                if not is_excluded(account, entry.path)
+                            ) if status != Status.UNVERIFIED else (),
                             queue="transfer" if status == Status.UNDER else "other",
                         )
                         self._task_retries[task.id] = (
@@ -1813,7 +1808,7 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("해당 경로의 작업이 끝난 뒤 다시 요청하세요.")
                 return
             # Hold the targets while confirmation is open, before the queue assigns an ID.
-            self._delete_targets[None] = targets
+            self._delete_targets[None] = targets, ()
             self.update_command_buttons()
             labels = [
                 f"{self.account_label(replica.account_id)} · /{replica.path}"
@@ -1851,16 +1846,18 @@ class MainWindow(QMainWindow):
             f"{self.account_label(first.account_id)} · /{first.path}"
             if len(replicas) == 1 else f"/{first.path}"
         )
+        account_ids = {replica.account_id for replica in replicas}
         task = self.transfers.submit(
             f"삭제 · {label}",
             lambda context: self.engine.execute_delete(replicas, context, approved=True),
+            wait_for=self.trash_predecessors(account_ids),
             queue="other",
         )
         if replica_request:
             self._replica_task_id = task.id
         targets = set(self.entry_endpoints(replicas))
         targets.update(self.engine.endpoint(replica) for replica in replicas)
-        self._delete_targets[task.id] = targets
+        self._delete_targets[task.id] = targets, account_ids
         self._task_retries[task.id] = (
             lambda: self.request_delete(replicas, replica_request=replica_request),
             False,
@@ -2739,6 +2736,7 @@ class MainWindow(QMainWindow):
             self,
             changes_available=lambda: self.configuration_available(notify=False),
             empty_trash=self.enqueue_empty_trash,
+            empty_trash_available=self.empty_trash_available,
         )
         self._accounts_dirty = False
         dialog.changed.connect(lambda: setattr(self, "_accounts_dirty", True))
@@ -2754,15 +2752,42 @@ class MainWindow(QMainWindow):
         else:
             self.update_capacity_label()
 
+    def trash_predecessors(self, account_ids):
+        if not self._trash_tasks:
+            return ()
+        account_ids = set(account_ids)
+        return tuple(
+            task_id for task_id, account in self._trash_tasks.items() if account.id in account_ids
+        )
+
+    def empty_trash_available(self, account):
+        return not self._closing and not self.trash_predecessors((account.id,))
+
     def enqueue_empty_trash(self, account):
-        if not self.configuration_available(notify=False):
-            raise ValueError("진행 중인 작업이 끝난 뒤 휴지통을 비울 수 있습니다.")
+        if not self.empty_trash_available(account):
+            raise ValueError("이 계정의 휴지통 비우기를 등록할 수 없습니다.")
+        predecessors = (
+            *(
+                task_id for task_id, plan in self._pending_plans.items()
+                if any(e.account_id == account.id for e in plan.write_endpoints)
+            ),
+            *(
+                task_id for task_id, (_, account_ids) in self._delete_targets.items()
+                if account.id in account_ids
+            ),
+            *(
+                task_id for task_id, entry in self._pending_repairs.items()
+                if entry.assessment.status != Status.UNVERIFIED and not is_excluded(account, entry.path)
+            ),
+        )
         task = self.transfers.submit(
             f"휴지통 비우기 · {account.label}",
             lambda context: self.account_manager.empty_trash(account, context),
+            wait_for=predecessors,
             queue="other",
         )
         self._trash_tasks[task.id] = account
+        self.update_configuration_buttons()
 
     def refresh_account_quota(self, account):
         def done(quota, error=""):

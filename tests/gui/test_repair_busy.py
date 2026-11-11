@@ -32,7 +32,7 @@ def repair_ui(qtbot, monkeypatch, backend, accounts, tmp_path):
         contexts.append(context)
         return context
 
-    def submit(label, operation, *, after=(), queue="transfer"):
+    def submit(label, operation, *, after=(), wait_for=(), queue="transfer"):
         task = TransferTask(str(len(queued) + 1), label, TaskContext())
         task.context.progress = lambda value: window.transfers._progress(task, value)
         queued.append((task, operation))

@@ -76,6 +76,15 @@ class MutationPlan:
     move_directories: tuple[Endpoint, ...] = ()
 
     @property
+    def write_endpoints(self):
+        return (
+            *self.mkdirs,
+            *(copy.target for copy in (*self.copies, *self.alternates)),
+            *(item.target for item in self.renames),
+            *(item.endpoint for item in (*self.deletions, *self.rmdirs)),
+        )
+
+    @property
     def endpoints(self):
         return (
             *(copy.source.endpoint for copy in self.copies),

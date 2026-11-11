@@ -112,12 +112,13 @@ class TransferManager:
                 task.state in {"대기", "진행 중", "취소 요청"} for task in self.tasks.values()
             )
 
-    def submit(self, label, operation, *, after=(), queue="transfer"):
+    def submit(self, label, operation, *, after=(), wait_for=(), queue="transfer"):
         with self._lock:
             if not self._accepting:
                 raise RuntimeError("프로그램을 종료하는 중입니다.")
             pool = self._pools[queue]
             dependencies = tuple(self.tasks[task_id] for task_id in after)
+            predecessors = dependencies + tuple(self.tasks[task_id] for task_id in wait_for)
             task_id = uuid4().hex
             task = TransferTask(task_id, label, TaskContext(retries=self.retries, trace_id=task_id))
             task.context.progress = lambda value: self._progress(task, value)
@@ -127,11 +128,11 @@ class TransferManager:
                 task.id,
                 task.action,
                 queue,
-                ",".join(after) or "-",
+                ",".join(item.id for item in predecessors) or "-",
             )
             self.on_change(task)
-            if any(item.state in {"대기", "진행 중", "취소 요청"} for item in dependencies):
-                self._waiting[task.id] = (pool, operation, dependencies)
+            if any(item.state in {"대기", "진행 중", "취소 요청"} for item in predecessors):
+                self._waiting[task.id] = (pool, operation, dependencies, predecessors)
             else:
                 try:
                     pool.submit(self._run, task, operation, dependencies)
@@ -148,8 +149,8 @@ class TransferManager:
             return task
 
     def _start_ready(self):
-        for task_id, (pool, operation, dependencies) in tuple(self._waiting.items()):
-            if any(item.state in {"대기", "진행 중", "취소 요청"} for item in dependencies):
+        for task_id, (pool, operation, dependencies, predecessors) in tuple(self._waiting.items()):
+            if any(item.state in {"대기", "진행 중", "취소 요청"} for item in predecessors):
                 continue
             del self._waiting[task_id]
             task = self.tasks[task_id]

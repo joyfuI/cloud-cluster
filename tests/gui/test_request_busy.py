@@ -45,7 +45,7 @@ def requests(qtbot, monkeypatch, backend, accounts, tmp_path):
         pending.append((function, done, failed, context))
         return context
 
-    def queue(label, operation, *, after=(), queue="transfer"):
+    def queue(label, operation, *, after=(), wait_for=(), queue="transfer"):
         task = TransferTask(str(len(queued) + 1), label, TaskContext())
         queued.append((task, operation))
         window.transfers.tasks[task.id] = task

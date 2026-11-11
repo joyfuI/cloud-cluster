@@ -136,11 +136,15 @@ def _confirmation_dialog(parent, title, details, prompt):
 class AccountDialog(QDialog):
     changed = Signal()
 
-    def __init__(self, manager, parent=None, *, changes_available=lambda: True, empty_trash=None):
+    def __init__(
+        self, manager, parent=None, *, changes_available=lambda: True,
+        empty_trash=None, empty_trash_available=lambda account: True,
+    ):
         super().__init__(parent)
         self.manager = manager
         self.changes_available = changes_available
         self.submit_empty_trash = empty_trash
+        self.empty_trash_available = empty_trash_available
         self.workers = WorkerPool(self)
         self.quota_workers = WorkerPool(self)
         self.quotas = {}
@@ -262,9 +266,7 @@ class AccountDialog(QDialog):
         for button in self.account_buttons:
             button.setEnabled(config_edit_available)
         account = self.selected()
-        self.empty_trash_button.setEnabled(
-            config_edit_available and self.can_empty_trash(account)
-        )
+        self.empty_trash_button.setEnabled(self.can_empty_trash(account))
         self.toggle_button.setEnabled(account is not None and idle)
         self.toggle_button.setText(
             "사용 여부 변경"
@@ -283,23 +285,25 @@ class AccountDialog(QDialog):
 
     def can_empty_trash(self, account):
         return bool(
-            account and account.enabled and not account.readonly and self.trash_support.get(account.id)
+            account and account.enabled and not account.readonly and not self.workers.pending
+            and self.trash_support.get(account.id) and self.empty_trash_available(account)
         )
 
     def empty_trash(self):
         account = self.selected()
-        if not self.config_edit_available() or not self.can_empty_trash(account):
+        if not self.can_empty_trash(account):
             return
         details = (
             f"{account.label} · {account.provider}\n\n"
-            "이 리모트의 휴지통 항목을 영구 삭제합니다. 앱 밖에서 삭제한 항목과 "
-            "앱 관리 폴더 밖의 항목도 포함될 수 있습니다. 삭제 후 복구할 수 없습니다."
+            "실행 시점에 이 리모트의 휴지통에 있는 항목을 영구 삭제합니다. "
+            "대기 중 휴지통에 들어간 항목과 앱 밖에서 삭제했거나 앱 관리 폴더 밖에 있던 항목도 "
+            "포함될 수 있습니다. 삭제 후 복구할 수 없습니다."
         )
         if account.provider == "pcloud":
             details += "\n\npCloud는 rclone에 설정된 사용자 이름과 비밀번호로 인증한 계정의 휴지통을 비웁니다."
         if not confirm(self, "휴지통 비우기", details, "휴지통을 비우시겠습니까?"):
             return
-        if not self.config_edit_available() or account != self.selected():
+        if account != self.selected() or not self.can_empty_trash(account):
             return
         try:
             self.submit_empty_trash(account)

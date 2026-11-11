@@ -131,18 +131,19 @@ class AccountManager:
                 raise ValueError("리모트 설정이 변경되었습니다. 계정 설정을 다시 확인하세요.")
             if not self.supports_empty_trash(account, context):
                 raise ValueError("현재 계정 설정에서 휴지통 비우기를 사용할 수 없습니다.")
-            action = "휴지통 비우기"
-            context.check()
-            try:
-                self.backend.empty_trash(account, context)
-            except BackendError as error:
-                context.record_failure(error)
-                step = StepResult(
-                    account.id, "", action, "error", f"{error} · 웹 휴지통에서 결과를 확인하세요."
-                )
-            else:
-                step = StepResult(account.id, "", action, "ok")
-            return OperationResult(action, (step,))
+        # The queued task keeps account edits disabled while the native job runs.
+        action = "휴지통 비우기"
+        context.check()
+        try:
+            self.backend.empty_trash(account, context)
+        except BackendError as error:
+            context.record_failure(error)
+            step = StepResult(
+                account.id, "", action, "error", f"{error} · 웹 휴지통에서 결과를 확인하세요."
+            )
+        else:
+            step = StepResult(account.id, "", action, "ok")
+        return OperationResult(action, (step,))
 
     def delete(self, remote):
         validate_remote_name(remote)

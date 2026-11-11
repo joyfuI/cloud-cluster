@@ -13,33 +13,46 @@ from cloud_cluster.domain import (
     Endpoint,
     ErrorKind,
     QuotaSnapshot,
+    Replica,
 )
 from cloud_cluster.gui import dialogs
 from cloud_cluster.gui.dialogs import AccountDialog, AuthDialog, SettingsDialog
 from cloud_cluster.gui.window import MainWindow
+from cloud_cluster.operations import MutationPlan
 from cloud_cluster.settings import Settings, SettingsStore
 
 
 def test_empty_trash_from_account_management(qtbot, monkeypatch, backend, tmp_path):
     drive = CloudAccount("drive", "drive-test", "drive")
+    box = CloudAccount("box", "box-test", "box")
     onedrive = CloudAccount("one", "one-test", "onedrive")
     pcloud = CloudAccount("pcloud", "pcloud-test", "pcloud")
-    settings = Settings(accounts=[drive, onedrive, pcloud])
+    settings = Settings(accounts=[drive, box, onedrive, pcloud])
     store = SettingsStore(tmp_path / "ui")
     manager = AccountManager(backend, store, settings)
     started, release = Event(), Event()
+    delete_started, release_delete, later_started = Event(), Event(), Event()
     calls, prompts = [], []
 
     def cleanup(account, context):
         calls.append(account)
-        started.set()
-        assert release.wait(5)
+        if account == drive:
+            started.set()
+            assert release.wait(10)
+
+    def delete(replicas, context, *, approved):
+        delete_started.set()
+        assert release_delete.wait(10)
+        raise ValueError("선행 삭제 실패")
 
     def confirm(parent, title, details, prompt):
         prompts.append(details)
         return len(prompts) > 1
 
-    monkeypatch.setattr(backend, "rpc", lambda *args, **kw: {"type": "drive"}, raising=False)
+    providers = {account.remote: account.provider for account in settings.accounts}
+    monkeypatch.setattr(
+        backend, "rpc", lambda method, *, name: {"type": providers[name]}, raising=False
+    )
     monkeypatch.setattr(backend, "empty_trash", cleanup, raising=False)
     monkeypatch.setattr(
         backend, "features",
@@ -55,38 +68,67 @@ def test_empty_trash_from_account_management(qtbot, monkeypatch, backend, tmp_pa
     window = MainWindow(backend, settings, store, manager)
     qtbot.addWidget(window)
     window.show()
+    monkeypatch.setattr(window.engine, "execute_delete", delete)
 
     def interact(dialog):
         qtbot.waitUntil(lambda: not dialog.quota_workers.pending)
         button = dialog.empty_trash_button
-        for row in (1, 2):
+        for row in (2, 3):
             dialog.table.selectRow(row)
             assert not button.isEnabled()
         dialog.table.selectRow(0)
         assert button.isEnabled()
+        assert all(not b.isEnabled() for b in dialog.account_buttons)
         button.click()
-        assert not window.transfers.tasks
+        assert len(window.transfers.tasks) == 1
         button.click()
-        qtbot.waitUntil(started.is_set)
+        trash = next(task for task in window.transfers.tasks.values() if task.action == "휴지통 비우기")
+        assert trash.state == "대기" and not started.is_set()
         assert not button.isEnabled()
         button.clicked.emit()
-        assert len(window.transfers.tasks) == 1
-        assert window.endpoints_busy(iter([Endpoint(drive.fs, "file", drive.id)]))
-        assert not window.endpoints_busy(iter([Endpoint(onedrive.fs, "file", onedrive.id)]))
+        assert len(window.transfers.tasks) == 2
+        window.cancel_task(trash)
+        assert trash.state == "취소됨" and not started.is_set()
+        assert button.isEnabled()
+        button.click()
+        trash = next(reversed(window.transfers.tasks.values()))
+        assert trash.state == "대기"
+
+        dialog.table.selectRow(1)
+        assert button.isEnabled()
+        button.click()
+        qtbot.waitUntil(lambda: calls == [box])
+        assert trash.state == "대기" and not started.is_set()
+
+        later = window.enqueue_plan(
+            MutationPlan("새 폴더", mkdirs=(Endpoint(drive.fs, "later", drive.id),)),
+            None,
+            execute=lambda context: later_started.set(),
+        )
+        assert later.state == "대기"
+        release_delete.set()
+        qtbot.waitUntil(started.is_set)
+        assert not later_started.is_set()
+        dialog.table.selectRow(0)
+        assert not button.isEnabled()
         release.set()
+        qtbot.waitUntil(later_started.is_set)
         qtbot.waitUntil(lambda: dialog.table.item(0, 4).text() == "2.0 KB")
         qtbot.waitUntil(button.isEnabled)
         assert not window._trash_tasks
-        assert next(iter(window.transfers.tasks.values())).state == "완료"
+        assert trash.state == "완료"
         return QDialog.DialogCode.Rejected
 
     monkeypatch.setattr(AccountDialog, "exec", interact)
     try:
         qtbot.waitUntil(lambda: window.snapshot is not None and not window.workers.pending)
+        window.enqueue_delete((Replica(drive.id, "before", False),), replica_request=False)
+        qtbot.waitUntil(delete_started.is_set)
         window.accounts_dialog()
-        assert calls == [drive]
-        assert all(drive.label in text and "영구 삭제" in text for text in prompts)
+        assert calls == [box, drive]
+        assert all("실행 시점" in text and "영구 삭제" in text for text in prompts)
     finally:
+        release_delete.set()
         release.set()
         qtbot.waitUntil(lambda: not window.transfers.busy and not window.workers.pending)
         window._shutdown_done = True

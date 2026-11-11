@@ -235,7 +235,9 @@ def test_failed_or_cancelled_parent_prevents_only_its_dependent_task(cancelled):
         first = manager.submit("folder", parent, queue="other")
         assert started.wait(3)
         child = manager.submit("file", lambda context: children.append(1), after=(first.id,))
+        cleanup = manager.submit("cleanup", lambda context: None, wait_for=(first.id,))
         other = manager.submit("independent", lambda context: others.append(1))
+        assert cleanup.state == "대기"
         if cancelled:
             manager.cancel(first.id)
         release.set()
@@ -245,6 +247,7 @@ def test_failed_or_cancelled_parent_prevents_only_its_dependent_task(cancelled):
         assert not manager.busy and not manager._waiting
         assert first.state == ("취소됨" if cancelled else "실패")
         assert child.state == "실패" and "선행 작업" in child.error and not children
+        assert cleanup.state == "완료"
         assert other.state == "완료" and others == [1]
     finally:
         release.set()
