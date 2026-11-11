@@ -1,5 +1,6 @@
 import json
 import logging
+from dataclasses import replace
 from threading import Event
 from types import SimpleNamespace
 
@@ -17,7 +18,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
 )
 
-from cloud_cluster.domain import BackendError, Endpoint, ErrorKind
+from cloud_cluster.domain import BackendError, Endpoint, ErrorKind, Status
 from cloud_cluster.gui import window as window_module
 from cloud_cluster.gui.dialogs import confirm
 from cloud_cluster.gui.window import MainWindow
@@ -259,6 +260,37 @@ def test_download_other_file_while_verification_is_rechecking(requests, monkeypa
     assert window._pending_plans[task.id].copies[0].source.endpoint.path == y.path
     complete(requests.pending[1])
     assert not window._verification_targets and window._replica_task_id == task.id
+
+
+def test_download_auto_source_balances_active_tasks_and_rotates_ties(requests, monkeypatch, tmp_path):
+    window = requests.window
+    x, y = requests.entries
+    healthy = replace(y, assessment=replace(y.assessment, status=Status.HEALTHY))
+    a, b = healthy.replicas
+
+    assert window.choose_replica(healthy) == a
+    assert window.choose_replica(healthy) == b
+    assert window.choose_replica(healthy) == a
+
+    window._explorer_drag = True
+    task = window.enqueue_dragged_file(x, b.account_id, tmp_path / x.name)
+    assert task is not None
+    assert window.choose_replica(healthy, scope=b.account_id) == b
+    for state in ("대기", "진행 중", "취소 요청"):
+        task.state = state
+        assert window.choose_replica(healthy) == a
+
+    monkeypatch.setattr(
+        window_module.QInputDialog, "getItem", lambda *args, **kwargs: (args[3][-1], True)
+    )
+    assert window.choose_replica(x) == x.replicas[-1]
+    task.state = "완료"
+    # The transfer can finish before the UI releases its plan.
+    assert task.id in window._pending_plans
+    queued = window.enqueue_dragged_file(healthy, "", tmp_path / healthy.name)
+    assert queued is not None
+    assert window._pending_plans[queued.id].copies[0].source.endpoint.account_id == b.account_id
+    assert not requests.errors
 
 
 @pytest.mark.parametrize("entry_point", ["replica", "button", "double_click"])

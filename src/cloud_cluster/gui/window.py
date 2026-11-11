@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -140,6 +141,7 @@ class MainWindow(QMainWindow):
         self._verification_targets = ()
         self._verification_reads = {}
         self._pending_plans = {}
+        self._last_auto_download_account = ""
         self._pending_repairs = {}
         self._trash_loading, self._restore_pending, self._restore_tasks = set(), set(), {}
         self._refreshing = None
@@ -1159,7 +1161,24 @@ class MainWindow(QMainWindow):
         if len(entry.replicas) == 1:
             return entry.replicas[0]
         if entry.assessment.status == Status.HEALTHY:
-            return entry.replicas[0]
+            downloads = Counter(
+                copy.source.endpoint.account_id
+                for task_id, plan in self._pending_plans.items()
+                if (task := self.transfers.tasks.get(task_id)) is not None
+                and task.state in {"대기", "진행 중", "취소 요청"}
+                for copy in plan.copies
+                if copy.target.account_id == "local"
+            )
+            replica = min(
+                entry.replicas,
+                key=lambda r: (
+                    downloads[r.account_id],
+                    r.account_id <= self._last_auto_download_account,
+                    r.account_id,
+                ),
+            )
+            self._last_auto_download_account = replica.account_id
+            return replica
         labels = [
             f"{self.account_label(r.account_id)} · {r.path} · {size_text(r.size)}"
             for r in entry.replicas
