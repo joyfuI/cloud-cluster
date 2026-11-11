@@ -57,6 +57,13 @@ class FileTableView(QTableView):
 
     def __init__(self, export_files=None):
         super().__init__()
+        self.setStyleSheet("""
+            QTableView { background-color: palette(base); }
+            QTableView::item:selected {
+                background-color: palette(highlight);
+                color: palette(highlighted-text);
+            }
+        """)
         self._export_files = export_files
         self._selection_start = self._selection_end = None
         self._selection_before_drag = QItemSelection()
