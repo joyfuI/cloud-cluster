@@ -69,6 +69,7 @@ from .dialogs import (
 from .file_table import INTERNAL_MIME, FileTableView
 from .folder_tree import FolderTreeView
 from .models import EntryProxy, FileTableModel, FolderTreeModel, size_text
+from .styles import ROW_SELECTION_STYLE
 from .workers import WorkerPool
 
 COMPLETED_TASK_STATES = {"완료"}
@@ -287,6 +288,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self._action("오픈소스 라이선스", self.show_licenses))
         splitter = QSplitter()
         self.tree = FolderTreeView()
+        self.tree.setStyleSheet(ROW_SELECTION_STYLE)
         self.tree.setHeaderHidden(True)
         self.tree.setMinimumWidth(190)
         self.tree.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
@@ -353,6 +355,7 @@ class MainWindow(QMainWindow):
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(4, 4, 4, 4)
         self.task_tree = QTreeWidget()
+        self.task_tree.setStyleSheet(ROW_SELECTION_STYLE)
         self.task_tree.setHeaderLabels(["작업", "상태", "진행 내용", "속도"])
         self.task_tree.setRootIsDecorated(True)
         self.task_tree.setColumnWidth(0, 270)

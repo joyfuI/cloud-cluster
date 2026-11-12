@@ -13,6 +13,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import QApplication, QRubberBand, QStyleOptionViewItem, QTableView
 
+from .styles import ROW_SELECTION_STYLE
+
 INTERNAL_MIME = "application/x-cloud-cluster-paths"
 
 
@@ -57,13 +59,7 @@ class FileTableView(QTableView):
 
     def __init__(self, export_files=None):
         super().__init__()
-        self.setStyleSheet("""
-            QTableView { background-color: palette(base); }
-            QTableView::item:selected {
-                background-color: palette(highlight);
-                color: palette(highlighted-text);
-            }
-        """)
+        self.setStyleSheet(ROW_SELECTION_STYLE)
         self._export_files = export_files
         self._selection_start = self._selection_end = None
         self._selection_before_drag = QItemSelection()

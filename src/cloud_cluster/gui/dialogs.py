@@ -44,6 +44,7 @@ from ..accounts import TRASH_CLEANUP_PROVIDERS
 from ..domain import Status
 from .models import size_text
 from .rclone_help_ko import AUTH_DATA_CHOICES, AUTH_LABELS_KO, translate_auth_text
+from .styles import ROW_SELECTION_STYLE
 from .workers import WorkerPool
 
 
@@ -153,6 +154,7 @@ class AccountDialog(QDialog):
         self.resize(760, 430)
         layout = QVBoxLayout(self)
         self.table = QTableWidget(0, 5)
+        self.table.setStyleSheet(ROW_SELECTION_STYLE)
         self.table.setWordWrap(False)
         self.table.setHorizontalHeaderLabels(
             ["계정", "제공업체", "사용 여부", "전체 용량", "사용 가능 용량"]
@@ -743,6 +745,7 @@ class IssueDialog(QDialog):
         self.heading.setWordWrap(True)
         layout.addWidget(self.heading)
         self.table = QTableWidget(0, 3)
+        self.table.setStyleSheet(ROW_SELECTION_STYLE)
         self.table.setWordWrap(False)
         self.table.setHorizontalHeaderLabels(["경로", "상태", "상세"])
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -909,6 +912,7 @@ class ReplicaDialog(QDialog):
         self.heading.setWordWrap(True)
         layout.addWidget(self.heading)
         self.table = QTableWidget(0, 6)
+        self.table.setStyleSheet(ROW_SELECTION_STYLE)
         self.table.setWordWrap(False)
         self.table.setHorizontalHeaderLabels(
             ["계정", "원격 경로", "크기", "수정 시각", "해시", "객체 ID"]
