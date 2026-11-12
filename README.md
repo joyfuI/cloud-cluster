@@ -50,7 +50,7 @@ Cloud Cluster는 여러 클라우드 계정을 하나로 묶어서 관리할 수
 
 ## 소스 실행과 Windows 빌드
 
-일반 Windows CPython 3.15.2와 uv를 사용합니다. DLL을 빌드하려면 Go 1.27.2와 MinGW GCC가 필요합니다.
+일반 Windows CPython 3.15.2와 uv를 사용합니다. DLL을 빌드하려면 Go 1.27.4와 MinGW GCC가 필요합니다.
 첫 빌드는 공개 패키지와 rclone 소스를 내려받습니다.
 
 ```powershell
@@ -67,7 +67,7 @@ uv sync --locked --all-groups
 .\scripts\package.ps1
 ```
 
-Nuitka 4.3.4와 Zig로 `dist\CloudCluster.exe`를 생성합니다. Nuitka의 Python 3.15 지원은 실험적입니다.
+Nuitka 4.3.5와 Zig로 `dist\CloudCluster.exe`를 생성합니다. Nuitka의 Python 3.15 지원은 실험적입니다.
 Qt 라이브러리와 한국어 번역, rclone DLL, 빌드 정보와 라이선스 고지를 exe에 포함합니다.
 **도움말 → 오픈소스 라이선스**에서 소스와 라이브러리 교체 안내를 볼 수 있습니다.
 공개 배포 조건은 [라이선스와 대응 소스](licenses/SOURCES.md), 테스트 절차는 [개발 지침](AGENTS.md#검증과-데이터-격리)에 있습니다.

@@ -18,7 +18,10 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = ["pytest>=9,<10", "pytest-qt>=4.5,<5", "ruff>=0.14,<1"]
-deploy = ["Nuitka==4.3.4", "ordered-set>=4.1,<5"]
+deploy = [
+    "nuitka==4.3.5",
+    "ordered-set>=4.1,<5",
+]
 
 [tool.ruff.lint]
 exclude = ["src/cloud_cluster/_vendor/*"]
@@ -34,7 +37,3 @@ markers = ["integration: explicit, isolated backend integration tests", "perform
 [tool.ruff]
 target-version = "py315"
 line-length = 100
-
-[tool.uv.exclude-newer-package]
-# Only this pinned compiler patch bypasses the host's rolling package-age cutoff.
-nuitka = "2026-11-01T15:00:00Z"

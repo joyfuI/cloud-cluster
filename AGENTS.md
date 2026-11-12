@@ -588,10 +588,12 @@
   마운트·WinFsp 우회는 설계 범위 밖이다. 소스 커밋과 DLL 해시는 빌드 산출물로 확인한다.
   기본 소스 폴더는 `build/rclone-<태그>`다. rclone 버전을 올릴 때는 대소문자 이름 변경 연결,
   RC 전송·인증 통합 테스트, DLL이 반환하는 제공업체 도움말과 한국어 번역을 함께 확인한다.
+  2026-11-12 Go 보안 패치를 반영하기 위해 rclone v1.76.0 DLL을 Go 1.27.4로 다시 빌드했다.
+  실제 컴파일러 버전은 `go version -m`으로 DLL에서 확인한다.
 - 공식 Python 래퍼를 vendor로 가져오면서 JSON 해석 실패에도 반환 메모리를 해제하도록
   `finally`를 보완하고 런타임 빌드 기능을 제거했다. 갱신 시 이 차이를 보존하고 ABI를 검증한다.
-- Nuitka 4.3에서 Python 3.15 호환 실패를 겪었다. 현재 컴파일러는 4.3.4이고 uv의 패키지
-  공개일 예외는 이 컴파일러에만 적용한다. 시스템 설정이나 다른 의존성으로 확대하지 않는다.
+- Nuitka 4.3에서 Python 3.15 호환 실패를 겪었다. 2026-11-12 Nuitka 4.3.5를 고정하고
+  uv 0.13.7에서 환경의 3일 공개일 제한으로 잠금 파일을 확인했다. 이전 Nuitka의 공개일 예외는 제거했다.
 - 앱 패키징은 Zig, Go DLL 빌드는 MinGW를 사용한다. Nuitka의 Python 3.15 패키징에
   MinGW를 적용하면 실패했다. Python 3.15 지원은 실험적이므로 컴파일 성공만으로 끝내지 않는다.
 - 번역 파일 조회의 `python -c` 인자는 PowerShell에서 큰따옴표로 감싸고 Python 파일명에는
@@ -699,6 +701,13 @@ $testDir = 'build/pytest-' + [guid]::NewGuid().ToString('N')
 
 ### 후속 검증 조건
 
+- 2026-11-12 Windows 11 x64 / CPython 3.15.2 / PySide6 6.12.0에서 Go 1.27.4로 만든
+  rclone v1.76.0 DLL과 Nuitka 4.3.5 / Zig 0.16.0 onefile을 확인했다. 빈 설정과 로컬 alias 두 개에서
+  한글 표시·목록 병합·정상 종료를 확인했다. 압축을 푼 exe·DLL·빌드 정보·라이선스 목록의 해시는
+  빌드 폴더의 파일과 일치했다.
+  일반 Windows 환경의 전체 offscreen 실행에서
+  `test_issue_dialog_repairs_then_rescans_original_scope`의 `_repair_busy` 검사가 실패했다.
+  해당 테스트는 단독 실행에서 통과했고, 나머지 833개와 Ruff도 별도 실행에서 통과했다.
 - 2026-11-08 Windows 11 x64 / CPython 3.15.2 / PySide6 6.12.0의 별도 잠금 환경에서
   rclone v1.76.0 DLL로 전체 테스트 789개와 Ruff가 통과했다. Nuitka 4.3.4와 Zig 0.16.0의
   onefile을 빈 설정과 두 로컬 alias에서 실행해 목록 표시·한글·종료를 확인했다.
