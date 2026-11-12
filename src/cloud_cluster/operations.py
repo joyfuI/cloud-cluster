@@ -202,9 +202,10 @@ class _UploadPreparation:
 
 
 class OperationEngine:
-    def __init__(self, backend, accounts, *, quotas=None):
+    def __init__(self, backend, accounts, *, quotas=None, verification_store=None):
         self.backend, self.accounts = backend, list(accounts)
         self.quotas = quotas if quotas is not None else QuotaCache(backend)
+        self.verification_store = verification_store
         self._guard = RLock()
         self._repair_planning = RLock()
         self._active = set()
@@ -755,6 +756,7 @@ class OperationEngine:
             raise BackendError(
                 ErrorKind.CHANGED, "복사한 내용이 원본과 다릅니다. 파일을 보존했습니다."
             )
+        digest = ""
         if precise and comparison != "same":
             current = self.backend.stat(source.endpoint, context)
             if current is None or current.fingerprint != left.fingerprint:
@@ -766,8 +768,9 @@ class OperationEngine:
             current = self.backend.stat(target, context)
             if current is None or current.fingerprint != right.fingerprint:
                 raise BackendError(ErrorKind.CHANGED, "내용 검증 도중 파일이 바뀌었습니다.")
+            digest = b
         self.assert_expected(source, context)
-        return right
+        return right, digest
 
     def _check_copy_target(self, copy, context, *, directories=None):
         current = self.inspect(copy.target, context, directories=directories)
@@ -800,8 +803,8 @@ class OperationEngine:
                     source=copy.source.endpoint,
                 )
                 try:
-                    self._verify(copy.source, copy.target, context, precise=True)
-                    return error.kind.value
+                    verified = self._verify(copy.source, copy.target, context, precise=True)
+                    return error.kind.value, verified
                 except BackendError as check_error:
                     if check_error.kind == ErrorKind.CANCELLED:
                         raise
@@ -813,7 +816,7 @@ class OperationEngine:
                 f"현재 대상 상태를 다시 확인하세요.{check_failure}",
                 diagnostic=f"{error.diagnostic} write_result=unconfirmed".strip(),
             ) from None
-        return None
+        return "", None
 
     def _settle_copy_space(self, copy, held, *, written):
         if copy.target.account_id == "local":
@@ -856,7 +859,9 @@ class OperationEngine:
                         and copy.previous is None
                         and self.account(target.account_id).provider == "box"
                     )
-                    recovered = self._copy(copy, context, upload=upload, single_attempt=single_attempt)
+                    recovered, verified = self._copy(
+                        copy, context, upload=upload, single_attempt=single_attempt
+                    )
                 except CopyRejected as error:
                     if copy is reserved_copy:
                         self._settle_copy_space(copy, held, written=False)
@@ -877,7 +882,7 @@ class OperationEngine:
                     results.append(
                         StepResult(target.account_id, target.path, "전송 결과 확인", "ok", note)
                     )
-                    return
+                    return target, *verified
                 results.append(
                     StepResult(display.account_id, display.path, action, "ok", reason)
                 )
@@ -893,7 +898,68 @@ class OperationEngine:
                     copy.source, target, context, precise=bool(copy.previous or precise)
                 )
                 results.append(StepResult(display.account_id, display.path, "전송 검증", "ok"))
-                return verified
+                return target, *verified
+
+    def _cache_upload_verification(self, path, copies, context):
+        store = self.verification_store
+        source = copies[0][0]
+        source_hashes = set(store.content_hashes(source.version))
+        proven = [
+            (target, replica, digest)
+            for original, target, replica, digest in copies
+            if original == source
+            and (
+                digest
+                or (
+                    source.version.size is not None
+                    and source.version.size == replica.size
+                    and source_hashes.intersection(store.content_hashes(replica))
+                )
+            )
+        ]
+        if not proven:
+            return
+
+        uploaded = {target.account_id: replica for _, target, replica, _ in copies}
+        replicas = []
+        for account in self.accounts:
+            if not account.enabled or is_excluded(account, path):
+                continue
+            replica = uploaded.get(account.id)
+            if replica is None:
+                replica = self.inspect(Endpoint(account.fs, path, account.id), context)
+            if replica is not None:
+                replicas.append(replica)
+        if assess(tuple(replicas), complete=True, expected_dirs=set()).status != Status.UNVERIFIED:
+            return
+        restored = tuple(
+            store.restore(self.account(replica.account_id), (replica,))[0] for replica in replicas
+        )
+        if assess(restored, complete=True, expected_dirs=set()).status != Status.UNVERIFIED:
+            return
+
+        cached = {replica.account_id: replica.verified_sha256 for replica in restored}
+        pending = [
+            (target, replica, digest)
+            for target, replica, digest in proven
+            if not cached.get(target.account_id)
+            or (digest and cached[target.account_id] != digest)
+        ]
+        if not pending:
+            return
+        digest = next((value for _, _, value in proven if value), "")
+        if not digest and any(not value for _, _, value in pending):
+            digest = dict(source_hashes).get("sha256") or self.backend.hash_file(
+                source.endpoint, context
+            )
+        self.assert_expected(source, context)
+        for _, target, replica, _ in copies:
+            self.assert_expected(ExpectedItem(target, replica), context)
+        context.check()
+        store.record(
+            (self.account(target.account_id), replica, value or digest)
+            for target, replica, value in pending
+        )
 
     def preflight(self, plan, context):
         context.check()
@@ -947,6 +1013,7 @@ class OperationEngine:
 
     def _execute(self, plan, context, held, replaced_targets):
         results, copied_targets = [], []
+        uploads = {}
         delete_total = len(plan.deletions) + len(plan.rmdirs)
         if plan.copies or plan.mkdirs or plan.renames:
             delete_total = 0
@@ -989,7 +1056,7 @@ class OperationEngine:
                 alternatives.setdefault((item.source.endpoint, item.target.path), deque()).append(item)
             for index, copy in enumerate(plan.copies, 1):
                 replaced = replaced_targets.get(copy.target)
-                verified = self._execute_copy(
+                target, replica, digest = self._execute_copy(
                     copy, context, held, results,
                     position=f"{index}/{len(plan.copies)}",
                     precise=plan.precise or bool(plan.deletions),
@@ -1002,8 +1069,10 @@ class OperationEngine:
                         if replaced else ""
                     ),
                 )
-                if plan.precise and verified is not None:
-                    copied_targets.append((copy.target, verified))
+                if plan.precise:
+                    copied_targets.append((target, replica))
+                if plan.local_sources and self.verification_store:
+                    uploads.setdefault(target.path, []).append((copy.source, target, replica, digest))
             # A move deletes nothing until every destination has passed verification.
             for index, item in enumerate(plan.deletions, 1):
                 if delete_total:
@@ -1040,6 +1109,18 @@ class OperationEngine:
                 results.append(
                     StepResult(item.target.account_id, item.target.path, "이름 변경", "ok")
                 )
+            for path, copies in uploads.items():
+                try:
+                    context.check()
+                    self._describe(context, "업로드 검증 결과 확인", copies[0][1])
+                    self._cache_upload_verification(path, copies, context)
+                except BackendError as error:
+                    if error.kind != ErrorKind.CANCELLED:
+                        logger.warning(
+                            "upload verification cache skipped trace=%s error=%s",
+                            context.trace_id,
+                            error_summary(error),
+                        )
         except Exception as error:
             cancelled = isinstance(error, BackendError) and error.kind == ErrorKind.CANCELLED
             state = "rejected" if isinstance(error, CopyRejected) else "error"

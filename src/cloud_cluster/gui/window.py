@@ -108,7 +108,10 @@ class MainWindow(QMainWindow):
         )
         self.engine = (
             OperationEngine(
-                backend, settings.accounts, quotas=account_manager.quotas if account_manager else None
+                backend,
+                settings.accounts,
+                quotas=account_manager.quotas if account_manager else None,
+                verification_store=self.vfs.verification_store,
             )
             if backend
             else None
@@ -1962,24 +1965,36 @@ class MainWindow(QMainWindow):
         context.check()
         return expected, digest
 
-    def save_verification(self, reads, context):
-        for index, (expected, _) in enumerate(reads, 1):
+    def save_verification(self, reads, context, *, reused=()):
+        checked = (*reads, *reused)
+        for index, (expected, _) in enumerate(checked, 1):
             context.describe(
-                f"원본 재확인 {index}/{len(reads)} · "
+                f"원본 재확인 {index}/{len(checked)} · "
                 f"{self.account_label(expected.endpoint.account_id)} · /{expected.endpoint.path}"
             )
             self.engine.assert_expected(expected, context)
         context.check()
         results = tuple((expected.version, digest) for expected, digest in reads)
-        stored = self.vfs.record_verification(results)
-        return results, stored, self.vfs.verification_store.error
+        stored = self.vfs.record_verification(results) if results else 0
+        return (
+            results + tuple((expected.version, digest) for expected, digest in reused),
+            stored,
+            self.vfs.verification_store.error if results else "",
+        )
 
     def read_verification(self, replicas, context):
-        reads = tuple(
-            self.read_replica_hash(replica, context, index=index, total=len(replicas))
-            for index, replica in enumerate(replicas, 1)
+        missing = tuple(replica for replica in replicas if not replica.verified_sha256)
+        reused = tuple(
+            (ExpectedItem(self.engine.endpoint(replica), replica), replica.verified_sha256)
+            for replica in replicas
+            if replica.verified_sha256
         )
-        return self.save_verification(reads, context)
+        reads = tuple(
+            self.read_replica_hash(replica, context, index=index, total=len(missing))
+            for index, replica in enumerate(missing, 1)
+        )
+        results, stored, error = self.save_verification(reads, context, reused=reused)
+        return results, stored, error, len(reused)
 
     def repair_issue(self, entry, context):
         if entry.assessment.status == Status.UNVERIFIED:
@@ -2049,8 +2064,10 @@ class MainWindow(QMainWindow):
             storage = f"저장된 검증 결과 {len(results)}개 재사용. "
             error = ""
         elif current.assessment.status == Status.UNVERIFIED:
-            results, stored, error = self.read_verification(current.replicas, context)
-            storage = f"재사용할 검증 결과 {stored}/{len(results)}개 저장. "
+            results, stored, error, reused = self.read_verification(current.replicas, context)
+            storage = f"재사용할 검증 결과 {stored}/{len(results) - reused}개 저장. "
+            if reused:
+                storage = f"저장된 검증 결과 {reused}개 재사용. " + storage
         else:
             raise ValueError(
                 f"상태가 {current.assessment.status.value}(으)로 달라졌습니다. 다시 검사하세요."

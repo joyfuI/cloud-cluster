@@ -838,7 +838,12 @@ class IssueDialog(QDialog):
         manual = len(selected) - folders - files - len(verification)
         reading = ""
         if verification:
-            sizes = [replica.size for entry in verification for replica in entry.replicas]
+            sizes = [
+                replica.size
+                for entry in verification
+                for replica in entry.replicas
+                if not replica.verified_sha256
+            ]
             reading = (
                 " · 검증 읽기 용량 미확인"
                 if None in sizes

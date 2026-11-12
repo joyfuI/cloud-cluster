@@ -1,4 +1,4 @@
-"""Map provider hashes or scoped object/path identities to byte-read SHA-256."""
+"""Map provider hashes or scoped object/path identities to verified SHA-256."""
 
 import json
 import re
@@ -21,7 +21,7 @@ class VerificationStore:
         self._lock = RLock()
 
     @staticmethod
-    def _hashes(replica):
+    def content_hashes(replica):
         if replica.is_dir:
             return ()
         return tuple(
@@ -34,7 +34,7 @@ class VerificationStore:
 
     @classmethod
     def _keys(cls, account, replica):
-        hashes = cls._hashes(replica)
+        hashes = cls.content_hashes(replica)
         if hashes:
             return hashes
         if (

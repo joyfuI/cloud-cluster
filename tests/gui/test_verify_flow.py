@@ -1,4 +1,6 @@
+import hashlib
 import sqlite3
+from dataclasses import replace
 from threading import Barrier
 
 import pytest
@@ -6,8 +8,128 @@ import pytest
 from cloud_cluster.domain import BackendError, ErrorKind, Status
 from cloud_cluster.gui import window as window_module
 from cloud_cluster.gui.window import MainWindow
+from cloud_cluster.operations import local_endpoint
 from cloud_cluster.settings import Settings, SettingsStore
+from cloud_cluster.transfers import TaskContext
 from cloud_cluster.verification import VerificationStore
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["comparable", "cached", "different_hashes", "partial", "overwrite", "recovered", "changed", "extra"],
+)
+def test_upload_saves_only_needed_verification_without_reading_cloud_again(
+    qtbot, monkeypatch, backend, accounts, tmp_path, case
+):
+    a, b, c = accounts
+    source = tmp_path / "x"
+    data = b"same"
+    source.write_bytes(data)
+    local = local_endpoint(source)
+    backend.put(local.fs, local.path, data)
+    backend.hash_types[a.fs, "x"] = "md5"
+    backend.hash_types[b.fs, "x"] = "md5" if case in {"comparable", "extra"} else "sha1"
+    if case in {"partial", "overwrite", "recovered"}:
+        backend.no_hashes.add(b.fs)
+    if case == "overwrite":
+        backend.put(b.fs, "x", b"prev")
+    if case == "extra":
+        backend.put(c.fs, "x", data)
+        backend.hash_types[c.fs, "x"] = "sha1"
+        accounts[2] = replace(c, readonly=True)
+
+    get_replica = backend.replica
+
+    def replica(fs, path, account_id):
+        item = get_replica(fs, path, account_id)
+        if account_id == "local":
+            hashes = {kind: hashlib.new(kind, data).hexdigest() for kind in ("md5", "sha1")}
+            item = replace(item, hashes=hashes)
+        return item
+
+    monkeypatch.setattr(backend, "replica", replica)
+    if case == "changed":
+        hash_file = backend.hash_file
+
+        def hash_then_change(endpoint, context):
+            digest = hash_file(endpoint, context)
+            backend.put(b.fs, "x", b"diff")
+            return digest
+
+        monkeypatch.setattr(backend, "hash_file", hash_then_change)
+    if case == "recovered":
+        copy_file = backend.copy_file
+
+        def copy_then_lose_response(origin, target, context):
+            copy_file(origin, target, context)
+            if target.account_id == b.id:
+                raise BackendError(ErrorKind.NETWORK)
+
+        monkeypatch.setattr(backend, "copy_file", copy_then_lose_response)
+
+    window = MainWindow(backend, Settings(accounts=accounts), SettingsStore(tmp_path / "ui"))
+    qtbot.addWidget(window)
+    try:
+        qtbot.waitUntil(lambda: window.snapshot is not None and not window.workers.pending)
+        writes = []
+        store = window.vfs.verification_store
+        if case == "cached":
+            digest = hashlib.sha256(data).hexdigest()
+            for account in (a, b):
+                backend.put(account.fs, "x", data)
+            assert store.record(
+                (account, backend.replica(account.fs, "x", account.id), digest)
+                for account in (a, b)
+            ) == 2
+        record = store.record
+
+        def capture(proofs):
+            proofs = tuple(proofs)
+            writes.append(tuple(account.id for account, _, _ in proofs))
+            return record(proofs)
+
+        monkeypatch.setattr(store, "record", capture)
+        plan = window.engine.plan_upload(source, "x")
+        task, = window.enqueue_uploads(plan)
+        qtbot.waitUntil(lambda: task.id in window._finished_tasks and not window.workers.pending)
+        assert task.state == "완료"
+
+        def reads():
+            return [fs for operation, fs, _ in backend.calls if operation == "hash"]
+
+        expected_reads = {
+            "comparable": [],
+            "cached": [],
+            "overwrite": [local.fs, b.fs],
+            "recovered": [local.fs, b.fs],
+        }.get(case, [local.fs])
+        assert reads() == expected_reads
+        expected_writes = {
+            "comparable": [], "cached": [], "changed": [], "partial": [(a.id,)]
+        }.get(case, [(a.id, b.id)])
+        assert [tuple(sorted(ids)) for ids in writes] == expected_writes
+
+        issues, complete, _ = window.vfs.scan("")
+        assert complete
+        if case in {"partial", "extra", "changed"}:
+            entry, = issues
+            assert entry.assessment.status == Status.UNVERIFIED
+            if case != "changed":
+                result = window.verify_issue(entry, TaskContext())
+                assert "SHA-256 일치" in result.steps[-1].message
+                assert reads() == [*expected_reads, (c if case == "extra" else b).fs]
+                issues, _, _ = window.vfs.scan("")
+                assert [entry.assessment.status for entry in issues] == (
+                    [Status.OVER] if case == "extra" else []
+                )
+        else:
+            assert not issues
+    finally:
+        qtbot.waitUntil(lambda: not window.transfers.busy and not window.workers.pending)
+        window._shutdown_done = True
+        window.vfs.close()
+        window.transfers.close()
+        window.close()
 
 
 @pytest.mark.parametrize("failure", [None, "changed", "cancelled", "hash", "save"])
