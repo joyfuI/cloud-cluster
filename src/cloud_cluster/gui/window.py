@@ -471,7 +471,7 @@ class MainWindow(QMainWindow):
             done({account.id: QuotaSnapshot() for account in accounts})
 
         try:
-            self.workers.submit(read, done, failed)
+            self.workers.submit(read, done, failed, confirm_on_close=False)
         except Exception as error:
             failed(error)
 
@@ -652,6 +652,7 @@ class MainWindow(QMainWindow):
                 ),
                 lambda snapshot: self.finish_refresh(generation, snapshot),
                 failed,
+                confirm_on_close=False,
             )
         except Exception as error:
             failed(error)
@@ -758,7 +759,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"/{snapshot.path} · {len(snapshot.entries):,}개 논리 항목")
 
     def sort_entries(self, column, order):
-        if not hasattr(self, "file_model"):
+        if self._closing or not hasattr(self, "file_model"):
             return
         entries = self.file_model.entries
         self.sort_generation += 1
@@ -787,6 +788,7 @@ class MainWindow(QMainWindow):
                 else None
             ),
             blocks_configuration=False,
+            confirm_on_close=False,
         )
 
     def tree_clicked(self, index):
@@ -809,7 +811,7 @@ class MainWindow(QMainWindow):
             )
 
     def load_tree(self, node):
-        if self.vfs is None:
+        if self.vfs is None or self._closing:
             node.loading = False
             return
         index = QPersistentModelIndex(self.tree_model.index_for(node))
@@ -823,6 +825,7 @@ class MainWindow(QMainWindow):
             lambda context: self.vfs.refresh(node.path, context),
             loaded,
             lambda error: setattr(node, "loading", False),
+            confirm_on_close=False,
         )
 
     def selected(self):
@@ -1669,7 +1672,9 @@ class MainWindow(QMainWindow):
             finish([(None, error)] * len(requests), None)
 
         try:
-            self.workers.submit(read, lambda result: finish(*result), failed, progress)
+            self.workers.submit(
+                read, lambda result: finish(*result), failed, progress, confirm_on_close=bool(requests)
+            )
         except Exception as error:
             failed(str(error))
 
@@ -2900,7 +2905,7 @@ class MainWindow(QMainWindow):
             return
         event.ignore()
         if not self._closing:
-            if (self.transfers.busy or self.workers.pending) and not confirm(
+            if (self.transfers.busy or self.workers.close_confirmation_pending) and not confirm(
                 self,
                 "프로그램 종료",
                 "진행 중인 작업을 취소하고 종료 완료를 기다립니다. 원격 부분 결과는 보존합니다.",

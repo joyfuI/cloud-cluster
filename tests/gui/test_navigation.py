@@ -262,6 +262,57 @@ def test_file_list_sort_does_not_block_configuration(qtbot, monkeypatch, tmp_pat
         qtbot.waitUntil(lambda: window._shutdown_done)
 
 
+@pytest.mark.parametrize("source", ["files", "tree", "task-refresh", "files-with-other-work"])
+def test_close_while_listing_is_pending(
+    qtbot, monkeypatch, backend, accounts, tmp_path, source
+):
+    monkeypatch.setattr(backend, "shutdown", lambda: True, raising=False)
+    prompts = []
+    monkeypatch.setattr(window_module, "confirm", lambda *args: prompts.append(args[1]) or False)
+    window = MainWindow(backend, Settings(accounts=accounts[:1]), SettingsStore(tmp_path / "ui"))
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window.snapshot is not None and not window.workers.pending)
+    release = Event()
+    contexts = []
+    list_account = window.vfs._list
+
+    def delayed(account, path, context):
+        contexts.append(context)
+        assert release.wait(5)
+        return list_account(account, path, context)
+
+    monkeypatch.setattr(window.vfs, "_list", delayed)
+    try:
+        if source in {"files", "files-with-other-work"}:
+            window.refresh()
+        elif source == "tree":
+            window.load_tree(window.tree_model.root.children[0])
+        else:
+            window.queue_task_refresh(browse=True)
+        qtbot.waitUntil(lambda: bool(contexts))
+        assert window.workers.configuration_pending
+
+        if source == "files-with-other-work":
+            other = window.workers.submit(lambda context: context.cancelled.wait(5))
+            window.close()
+            assert prompts == ["프로그램 종료"]
+            assert not contexts[0].cancelled.is_set() and not other.cancelled.is_set()
+            other.cancelled.set()
+            qtbot.waitUntil(lambda: len(window.workers.pending) == 1)
+            prompts.clear()
+
+        window.close()
+        assert not prompts and contexts[0].cancelled.is_set()
+        assert window.isVisible() and not window._shutdown_done
+    finally:
+        release.set()
+        qtbot.waitUntil(lambda: not window.workers.pending)
+        window.close()
+        qtbot.waitUntil(lambda: window._shutdown_done)
+    assert not window.isVisible() and not prompts
+
+
 def test_task_refresh_keeps_cached_rows_until_their_account_responds(
     qtbot, monkeypatch, backend, accounts, tmp_path
 ):

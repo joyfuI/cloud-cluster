@@ -15,12 +15,13 @@ class WorkerSignals(QObject):
 
 
 class Worker(QRunnable):
-    def __init__(self, function, *, blocks_configuration):
+    def __init__(self, function, *, blocks_configuration, confirm_on_close):
         super().__init__()
         self.signals = WorkerSignals()
         self.context = TaskContext(progress=self.signals.progress.emit, trace_id=uuid4().hex)
         self.function = function
         self.blocks_configuration = blocks_configuration
+        self.confirm_on_close = confirm_on_close
         self.action = getattr(function, "__qualname__", type(function).__qualname__)
 
     @Slot()
@@ -66,8 +67,23 @@ class WorkerPool(QObject):
     def configuration_pending(self):
         return any(worker.blocks_configuration for worker in self.pending)
 
-    def submit(self, function, done=None, failed=None, progress=None, *, blocks_configuration=True):
-        worker = Worker(function, blocks_configuration=blocks_configuration)
+    @property
+    def close_confirmation_pending(self):
+        return any(worker.confirm_on_close for worker in self.pending)
+
+    def submit(
+        self,
+        function,
+        done=None,
+        failed=None,
+        progress=None,
+        *,
+        blocks_configuration=True,
+        confirm_on_close=True,
+    ):
+        worker = Worker(
+            function, blocks_configuration=blocks_configuration, confirm_on_close=confirm_on_close
+        )
         self.pending.add(worker)
         self.busy_changed.emit()
         if done:
