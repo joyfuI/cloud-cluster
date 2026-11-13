@@ -36,7 +36,7 @@ try {
     # Avoid stale constants and payloads from Zig's C23 #embed compilation cache.
     $env:NUITKA_RESOURCE_MODE = 'coff_obj'
     # Keep a runnable payload so users can run it with replacement Qt libraries after extraction.
-    & $Python -m nuitka --onefile --onefile-no-dll --enable-plugin=pyside6 --include-package=cloud_cluster --windows-console-mode=disable --windows-icon-from-ico=$appIcon --output-filename=CloudCluster.exe --output-dir=$packageBuild --user-package-configuration-file=nuitka-package.config.yml @dataOptions --assume-yes-for-downloads --zig src/cloud_cluster/__main__.py
+    & $Python -m nuitka --onefile --onefile-no-dll --enable-plugin=pyside6 --windows-console-mode=disable --windows-icon-from-ico=$appIcon --output-filename=CloudCluster.exe --output-dir=$packageBuild --user-package-configuration-file=nuitka-package.config.yml @dataOptions --assume-yes-for-downloads --zig --python-flag=-m src/cloud_cluster
     if ($LASTEXITCODE) { throw 'Nuitka deployment failed' }
     $packageDir = Join-Path $projectRoot 'dist'
     New-Item -ItemType Directory -Path $packageDir -Force | Out-Null

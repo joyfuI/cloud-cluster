@@ -598,6 +598,10 @@
   `finally`를 보완하고 런타임 빌드 기능을 제거했다. 갱신 시 이 차이를 보존하고 ABI를 검증한다.
 - Nuitka 4.3에서 Python 3.15 호환 실패를 겪었다. 2026-11-12 Nuitka 4.3.5를 고정하고
   uv 0.13.7에서 환경의 3일 공개일 제한으로 잠금 파일을 확인했다. 이전 Nuitka의 공개일 예외는 제거했다.
+- Nuitka는 `--python-flag=-m src/cloud_cluster`로 패키지를 진입점으로 사용한다.
+  `__main__.py`를 직접 넘기면 진입점 지정 방식에 대한 경고가 나온다.
+  onefile이 앱의 import를 따라가며, `--include-package=cloud_cluster`를 함께 지정하면
+  이미 포함된 진입점을 다시 포함하려 한다는 경고가 나온다.
 - 앱 패키징은 Zig, Go DLL 빌드는 MinGW를 사용한다. Nuitka의 Python 3.15 패키징에
   MinGW를 적용하면 실패했다. Python 3.15 지원은 실험적이므로 컴파일 성공만으로 끝내지 않는다.
 - 번역 파일 조회의 `python -c` 인자는 PowerShell에서 큰따옴표로 감싸고 Python 파일명에는
@@ -705,6 +709,9 @@ $testDir = 'build/pytest-' + [guid]::NewGuid().ToString('N')
 
 ### 후속 검증 조건
 
+- 2026-11-13 Windows 11 x64 / CPython 3.15.2 / Nuitka 4.3.5 / Zig 0.16.0에서 패키지
+  진입점 경고가 사라진 onefile을 확인했다. 빈 설정과 로컬 alias 두 개에서 한글 표시·목록
+  병합·정상 종료를 확인했다. 압축 해제된 exe·DLL·빌드 정보·Go 모듈 목록의 해시가 일치했다.
 - 2026-11-12 Windows 11 x64 / CPython 3.15.2 / PySide6 6.12.0에서 Go 1.27.4로 만든
   rclone v1.76.0 DLL과 Nuitka 4.3.5 / Zig 0.16.0 onefile을 확인했다. 빈 설정과 로컬 alias 두 개에서
   한글 표시·목록 병합·정상 종료를 확인했다. 압축을 푼 exe·DLL·빌드 정보·라이선스 목록의 해시는
