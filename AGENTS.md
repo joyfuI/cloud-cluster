@@ -618,6 +618,11 @@
 - 앱 창과 Windows 실행 파일에 같은 `src/cloud_cluster/cloud-cluster.ico`를 사용한다.
   Qt는 모듈 옆에서 ICO를 읽고, 패키징은 같은 파일을 onefile 데이터와 exe 아이콘 리소스에 넣는다.
   아이콘을 바꿀 때는 작은 크기와 투명 배경을 확인하고 exe를 다시 빌드한다.
+  2026-11-15 사용자는 제목 표시줄은 정상인데 작업표시줄에 간헐적으로 기본 아이콘이 표시된다고
+  보고했다. `--company-name`과 `--product-name`으로 Nuitka가 창을 띄우는 프로세스에 고정
+  AppUserModelID `CloudCluster.CloudCluster`를 설정하게 한다. onefile의 내부 실행 경로는 실행마다
+  달라지므로 두 이름은 빌드 버전이나 경로와 관계없이 유지한다. Nuitka는 이 메타데이터에 버전도
+  요구하므로 `pyproject.toml`의 프로젝트 버전을 사용한다.
 - 포터블 사용을 위해 config 암호화·DPAPI·사용자 SID에 고정한 ACL을 적용하지 않는다.
   Windows 파일 권한은 저장 폴더에서 상속한다. 이전의 명시적 ACL은 다른 PC의 사용자와
   FAT/exFAT에서 저장·읽기를 막을 수 있었다. 기존 파일의 ACL을 자동으로 바꾸지는 않는다.

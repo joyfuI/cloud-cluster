@@ -24,6 +24,10 @@ try {
     if ($LASTEXITCODE -or -not (Test-Path -LiteralPath $qtTranslation)) {
         throw 'Qt Korean translation file is missing'
     }
+    $productVersion = & $Python -c "import tomllib; from pathlib import Path; print(tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+    if ($LASTEXITCODE -or -not $productVersion) {
+        throw 'Could not read the project version'
+    }
     $appIcon = 'src/cloud_cluster/cloud-cluster.ico'
     $dataOptions = @(
         '--include-data-dir=licenses=licenses'
@@ -36,7 +40,7 @@ try {
     # Avoid stale constants and payloads from Zig's C23 #embed compilation cache.
     $env:NUITKA_RESOURCE_MODE = 'coff_obj'
     # Keep a runnable payload so users can run it with replacement Qt libraries after extraction.
-    & $Python -m nuitka --onefile --onefile-no-dll --enable-plugin=pyside6 --windows-console-mode=disable --windows-icon-from-ico=$appIcon --output-filename=CloudCluster.exe --output-dir=$packageBuild --user-package-configuration-file=nuitka-package.config.yml @dataOptions --assume-yes-for-downloads --zig --python-flag=-m src/cloud_cluster
+    & $Python -m nuitka --onefile --onefile-no-dll --enable-plugin=pyside6 --windows-console-mode=disable --windows-icon-from-ico=$appIcon --company-name=CloudCluster --product-name=CloudCluster --product-version=$productVersion --output-filename=CloudCluster.exe --output-dir=$packageBuild --user-package-configuration-file=nuitka-package.config.yml @dataOptions --assume-yes-for-downloads --zig --python-flag=-m src/cloud_cluster
     if ($LASTEXITCODE) { throw 'Nuitka deployment failed' }
     $packageDir = Join-Path $projectRoot 'dist'
     New-Item -ItemType Directory -Path $packageDir -Force | Out-Null

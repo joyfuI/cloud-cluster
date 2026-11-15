@@ -69,5 +69,6 @@ uv sync --locked --all-groups
 
 Nuitka 4.3.5와 Zig로 `dist\CloudCluster.exe`를 생성합니다. Nuitka의 Python 3.15 지원은 실험적입니다.
 Qt 라이브러리와 한국어 번역, rclone DLL, 빌드 정보와 라이선스 고지를 exe에 포함합니다.
+이전 작업표시줄 고정 항목에 기본 아이콘이 남아 있으면 고정을 해제하고 새 `CloudCluster.exe`를 직접 실행해 확인하세요.
 **도움말 → 오픈소스 라이선스**에서 소스와 라이브러리 교체 안내를 볼 수 있습니다.
 공개 배포 조건은 [라이선스와 대응 소스](licenses/SOURCES.md), 테스트 절차는 [개발 지침](AGENTS.md#검증과-데이터-격리)에 있습니다.
