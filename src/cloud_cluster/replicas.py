@@ -193,27 +193,21 @@ def merge(
 
 
 def effective_capacity(quotas) -> QuotaSnapshot:
-    quotas = tuple(quotas)
-    if len(quotas) < 2:
-        return QuotaSnapshot(0, 0)
-
     def valid(value):
         return type(value) is int and value >= 0
 
-    totals = [q.total for q in quotas]
-    total = None
-    if all(valid(value) for value in totals):
-        total = min(sum(totals) // 2, sum(totals) - max(totals))
-    if not all(
-        valid(q.total) and valid(q.free) and valid(q.reserved) and q.free <= q.total for q in quotas
-    ):
-        return QuotaSnapshot(total, None)
-
-    levels = {}
+    totals, levels = [], {}
     for quota in quotas:
+        if not valid(quota.total):
+            continue
+        totals.append(quota.total)
+        if not (valid(quota.free) and valid(quota.reserved) and quota.free <= quota.total):
+            continue
         free = max(0, quota.free - quota.reserved)
         if free:
             levels.setdefault(Fraction(free, quota.total), []).append(quota.total)
+    total_sum = sum(totals)
+    total = min(total_sum // 2, total_sum - max(totals, default=0))
     groups = [[level, levels[level]] for level in sorted(levels, reverse=True)]
     available = Fraction(0)
     # Follow the two highest free/total ratios continuously, merging only at ratio crossings.

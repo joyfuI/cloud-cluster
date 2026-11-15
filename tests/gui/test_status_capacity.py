@@ -99,15 +99,15 @@ def test_less_than_two_writable_accounts_has_no_replicated_capacity(capacity_ui,
     assert ui.window.capacity_label.text().endswith("남은 0 B / 전체 0 B")
 
 
-def test_missing_backend_with_configured_accounts_does_not_report_zero_capacity(capacity_ui):
+def test_missing_backend_with_configured_accounts_reports_zero_known_capacity(capacity_ui):
     window = capacity_ui.window
     window.engine = None
     window.refresh_capacity()
-    assert window.capacity_label.text().endswith("남은 확인 불가 / 전체 확인 불가")
+    assert window.capacity_label.text().endswith("남은 0 B / 전체 0 B")
 
 
 @pytest.mark.parametrize("kind", ["unsupported", "error", "missing", "zero"])
-def test_quota_unknown_failure_and_zero_are_distinct(capacity_ui, qtbot, monkeypatch, kind):
+def test_capacity_uses_available_values_for_each_estimate(capacity_ui, qtbot, monkeypatch, kind):
     ui = capacity_ui
     if kind == "unsupported":
         ui.backend.caps["b"] = BackendCapabilities(quota=False)
@@ -126,12 +126,10 @@ def test_quota_unknown_failure_and_zero_are_distinct(capacity_ui, qtbot, monkeyp
     qtbot.waitUntil(lambda: not ui.window.workers.pending)
     text = ui.window.capacity_label.text()
     assert not ui.window.capacity_label.toolTip()
-    if kind == "zero":
+    if kind in ("zero", "missing"):
         assert text.endswith("남은 100 B / 전체 200 B")
-    elif kind == "missing":
-        assert text.endswith("남은 확인 불가 / 전체 200 B")
     else:
-        assert text.endswith("남은 확인 불가 / 전체 확인 불가")
+        assert text.endswith("남은 100 B / 전체 100 B")
 
 
 def test_capacity_coalesces_refreshes_while_a_query_is_pending(capacity_ui, monkeypatch):

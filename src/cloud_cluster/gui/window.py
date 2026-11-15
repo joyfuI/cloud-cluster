@@ -407,12 +407,9 @@ class MainWindow(QMainWindow):
             if self.engine:
                 self._capacity_quotas = self.engine.quotas.snapshot(self._capacity_accounts)
                 quota = self.engine.capacity(self._capacity_quotas)
-            elif len(self._capacity_accounts) < 2:
-                quota = QuotaSnapshot(0, 0)
             else:
-                quota = QuotaSnapshot()
-            free = size_text(quota.free) if quota.free is not None else "확인 불가"
-            total = size_text(quota.total) if quota.total is not None else "확인 불가"
+                quota = QuotaSnapshot(0, 0)
+            free, total = size_text(quota.free), size_text(quota.total)
             state = "추정치 갱신 중" if self._capacity_loading else "추정"
             text = f"통합 용량({state}): 남은 {free} / 전체 {total}"
         self.capacity_label.setText(text)
