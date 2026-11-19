@@ -11,6 +11,8 @@ Cloud Cluster는 여러 클라우드 계정을 하나로 묶어서 관리할 수
 
 이 프로젝트는 OpenAI Codex로 만들어졌습니다.
 
+관련 잡담은 [https://blog.joyfui.com/1328](https://blog.joyfui.com/1328)
+
 ## 빠른 시작
 
 대상 환경은 Windows 10 x64 1809 이상과 Windows 11 x64입니다.
