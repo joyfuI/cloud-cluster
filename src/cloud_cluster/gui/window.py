@@ -2548,7 +2548,10 @@ class MainWindow(QMainWindow):
                 detail = " · ".join(filter(None, (problem, detail)))
             elif task.state == "완료":
                 fallback = next(
-                    (step for step in reversed(steps) if step.action in {"대체 업로드", "전송 결과 확인"}),
+                    (
+                        step for step in reversed(steps)
+                        if step.action in {"대체 업로드", "대체 복제", "전송 결과 확인"}
+                    ),
                     None,
                 )
                 if fallback is not None:

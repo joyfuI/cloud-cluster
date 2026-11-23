@@ -4,7 +4,13 @@ from threading import Event, Thread
 
 import pytest
 
-from cloud_cluster.domain import BackendCapabilities, BackendError, ErrorKind, QuotaSnapshot
+from cloud_cluster.domain import (
+    BackendCapabilities,
+    BackendError,
+    CopyRejected,
+    ErrorKind,
+    QuotaSnapshot,
+)
 from cloud_cluster.operations import OperationEngine
 from cloud_cluster.transfers import TaskContext
 from cloud_cluster.vfs import VirtualFileSystem
@@ -83,6 +89,9 @@ def test_replica_repair_recommends_by_remaining_ratio_and_reserved_space(
     (copy,) = plan.copies
     assert copy.target.account_id == target_id and copy.previous is None
     assert copy.source.endpoint.account_id == a.id
+    assert [item.target.account_id for item in plan.alternates] == [
+        account.id for account in (b, c) if account.id != target_id
+    ]
     assert engine.execute(plan, TaskContext(), approved=True).outcome == "완료"
     target = next(account for account in accounts if account.id == target_id)
     assert backend.nodes[target.fs, "file"].data == backend.nodes[a.fs, "file"].data
@@ -113,6 +122,7 @@ def test_replica_repair_skips_ineligible_recommended_accounts(backend, accounts,
     accounts = [a, b, c]
     plan = OperationEngine(backend, accounts).plan_repair(read_entry(backend, accounts, "file"))
     assert plan.copies[0].target.account_id == b.id
+    assert not plan.alternates
 
 
 def test_replica_repair_uses_actual_file_size_for_limit_and_space(backend, accounts):
@@ -207,6 +217,71 @@ def test_direct_repair_requires_a_request_and_checks_cancellation_before_lookup(
         engine.execute_repair(entry, context, approved=True)
     assert error.value.kind == ErrorKind.CANCELLED and not backend.calls
     assert not engine._active and not engine._reserved
+
+
+@pytest.mark.parametrize(
+    ("failure", "attempts", "outcome"),
+    [
+        ("rejected", ["b", "c"], "완료"),
+        ("reservation", ["c"], "완료"),
+        ("lost_response", ["b"], "완료"),
+        ("unconfirmed", ["b"], "실패 / 결과 확인 필요"),
+        ("changed_alternate", ["b"], "실패 / 결과 확인 필요"),
+    ],
+)
+def test_direct_replica_repair_recovers_like_upload(
+    backend, accounts, monkeypatch, failure, attempts, outcome
+):
+    a, b, c = accounts
+    accounts[1] = b = replace(b, provider="box")
+    backend.put(a.fs, "file", b"data")
+    entry = read_entry(backend, accounts, "file")
+    engine = OperationEngine(backend, accounts)
+    plan_repair, copy_file = engine.plan_repair, backend.copy_file
+    seen, box_checks = [], []
+
+    def plan_then_consume_space(*args):
+        plan = plan_repair(*args)
+        engine.quotas.consume(b, 90_000)
+        return plan
+
+    def transfer(source, target, context):
+        seen.append(target.account_id)
+        if target.account_id == b.id:
+            box_checks.append((context.retries, (c.fs.casefold(), "file") in engine._active))
+            if failure == "changed_alternate":
+                backend.put(c.fs, "file", b"external")
+            if failure in {"rejected", "changed_alternate"}:
+                raise CopyRejected(ErrorKind.FILE_SIZE)
+            if failure == "lost_response":
+                copy_file(source, target, context)
+            raise BackendError(ErrorKind.NETWORK)
+        return copy_file(source, target, context)
+
+    if failure == "reservation":
+        monkeypatch.setattr(engine, "plan_repair", plan_then_consume_space)
+    if failure == "lost_response":
+        backend.no_hashes.add(b.fs)
+    monkeypatch.setattr(backend, "copy_file", transfer)
+    result = engine.execute_repair(entry, TaskContext(), approved=True)
+
+    assert seen == attempts and result.outcome == outcome
+    assert box_checks == ([(0, True)] if b.id in attempts else [])
+    assert not engine._active and not any(engine._reserved.values())
+    assert backend.nodes[a.fs, "file"].data == b"data"
+    if failure in {"rejected", "reservation"}:
+        assert (b.fs, "file") not in backend.nodes
+        assert backend.nodes[c.fs, "file"].data == b"data"
+        assert any(step.action == "대체 복제" and step.account_id == c.id for step in result.steps)
+    elif failure == "changed_alternate":
+        assert backend.nodes[c.fs, "file"].data == b"external"
+    else:
+        assert (c.fs, "file") not in backend.nodes
+        if failure == "lost_response":
+            assert ("hash", b.fs, "file") in backend.calls
+            assert any(step.action == "전송 결과 확인" for step in result.steps)
+        else:
+            assert ErrorKind.NETWORK.value in result.steps[-1].message
 
 
 def test_direct_repairs_reserve_recommended_space_before_other_plans_and_transfer_concurrently(

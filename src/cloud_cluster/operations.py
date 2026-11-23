@@ -74,6 +74,11 @@ class MutationPlan:
     precise: bool = False
     move_targets: tuple[ExpectedItem, ...] = ()
     move_directories: tuple[Endpoint, ...] = ()
+    replica_repair: bool = False
+
+    @property
+    def recover_copy_errors(self) -> bool:
+        return bool(self.local_sources or self.replica_repair)
 
     @property
     def write_endpoints(self):
@@ -119,13 +124,13 @@ class MutationPlan:
             lines.append("새 파일의 공간 예약이나 쓰기 전 전송이 거부되면 아래 대체 후보를 시도합니다.")
             for item in self.alternates:
                 lines.append(f"대체 후보 · {item.target.account_id}:/{item.target.path}")
-        if self.local_sources:
+        if self.recover_copy_errors:
             lines.append("전송 응답이 불명확하면 원래 대상의 내용을 확인할 수 있습니다.")
         for item in (*self.deletions, *self.rmdirs):
             lines.append(f"삭제: {item.endpoint.account_id}:{item.endpoint.path}")
         for item in self.mkdirs:
             lines.append(f"폴더 생성: {item.account_id}:{item.path}")
-        if self.local_sources or any(item.previous for item in self.copies) or self.deletions:
+        if self.recover_copy_errors or any(item.previous for item in self.copies) or self.deletions:
             lines.append("필요한 경우 실제 바이트를 읽어 검증합니다.")
             maximum_read = 2 * sum(item.source.version.size or 0 for item in self.copies)
             if maximum_read:
@@ -594,16 +599,16 @@ class OperationEngine:
                     raise
                 continue
             candidates.append(account)
-        target = choose_accounts(candidates, quotas, source.size, required=1)[0]
+        targets = choose_accounts(
+            candidates, quotas, source.size, required=1, include_alternates=True
+        )
+        expected = ExpectedItem(self.endpoint(source), source)
+        copies = tuple(CopyIntent(expected, Endpoint(a.fs, entry.path, a.id), None) for a in targets)
         return MutationPlan(
             "추천 계정으로 복제",
-            copies=(
-                CopyIntent(
-                    ExpectedItem(self.endpoint(source), source),
-                    Endpoint(target.fs, entry.path, target.id),
-                    None,
-                ),
-            ),
+            copies=copies[:1],
+            alternates=copies[1:],
+            replica_repair=True,
         )
 
     def _walk(self, replica, context, *, directories, confirmed=False):
@@ -779,7 +784,7 @@ class OperationEngine:
         ):
             raise BackendError(ErrorKind.CHANGED, "대상 항목이 승인 후 달라졌습니다.")
 
-    def _copy(self, copy, context, *, upload=False, single_attempt=False):
+    def _copy(self, copy, context, *, recover_errors=False, single_attempt=False):
         self._phase(context, "전송 직전 원본 확인", copy.source.endpoint, write_result="not_attempted")
         self.assert_expected(copy.source, context)
         self._phase(context, "전송 직전 대상 확인", copy.target, write_result="not_attempted")
@@ -792,10 +797,12 @@ class OperationEngine:
                 replace(context, retries=0) if single_attempt else context,
             )
         except BackendError as error:
-            if error.kind == ErrorKind.CANCELLED or (upload and isinstance(error, CopyRejected)):
+            if error.kind == ErrorKind.CANCELLED or (
+                recover_errors and isinstance(error, CopyRejected)
+            ):
                 raise
             check_failure = ""
-            if upload:
+            if recover_errors:
                 self._describe(
                     context,
                     f"전송 결과 확인 · {error.kind.value}",
@@ -828,8 +835,10 @@ class OperationEngine:
             self._reserved[account_id] -= size
             held[account_id] -= size
 
-    def _execute_copy(self, copy, context, held, results, *, position, precise, alternates, reason):
-        upload = alternates is not None
+    def _execute_copy(
+        self, copy, context, held, results, *,
+        position, precise, alternates, alternate_action, reason,
+    ):
         reserved_copy = copy
         while True:
             context.check()
@@ -842,13 +851,15 @@ class OperationEngine:
                     if copy is not reserved_copy:
                         try:
                             _, reservation, _ = stack.enter_context(
-                                self._reserve(MutationPlan("파일 업로드", (copy,)), context, note=reason)
+                                self._reserve(
+                                    MutationPlan(alternate_action, (copy,)), context, note=reason
+                                )
                             )
                         except BackendError as error:
                             if error.kind != ErrorKind.QUOTA:
                                 raise
                             raise CopyRejected(error.kind) from None
-                    action = "대체 업로드" if reason else "전송"
+                    action = alternate_action if reason else "전송"
                     self._describe(
                         context, f"{action} · {position}", target, copy.source.version.size,
                         note=reason, display=display,
@@ -860,7 +871,8 @@ class OperationEngine:
                         and self.account(target.account_id).provider == "box"
                     )
                     recovered, verified = self._copy(
-                        copy, context, upload=upload, single_attempt=single_attempt
+                        copy, context, recover_errors=alternates is not None,
+                        single_attempt=single_attempt,
                     )
                 except CopyRejected as error:
                     if copy is reserved_copy:
@@ -888,7 +900,7 @@ class OperationEngine:
                 )
                 self._describe(
                     context,
-                    f"{'대체 업로드 검증' if reason else '전송 검증'} · {position}",
+                    f"{action} 검증 · {position}",
                     target,
                     write_result="reported_success",
                     note=reason,
@@ -1062,8 +1074,9 @@ class OperationEngine:
                     precise=plan.precise or bool(plan.deletions),
                     alternates=(
                         alternatives.get((copy.source.endpoint, copy.target.path), deque())
-                        if plan.local_sources else None
+                        if plan.recover_copy_errors else None
                     ),
+                    alternate_action="대체 복제" if plan.replica_repair else "대체 업로드",
                     reason=(
                         f"{self.account(replaced.target.account_id).label} · {ErrorKind.QUOTA.value}"
                         if replaced else ""
@@ -1132,9 +1145,11 @@ class OperationEngine:
         if not any((plan.copies, plan.deletions, plan.mkdirs, plan.rmdirs, plan.renames)):
             raise ValueError("실행할 항목이 없습니다.")
         if plan.alternates and (
-            not plan.local_sources or any(copy.previous is not None for copy in plan.alternates)
+            not plan.recover_copy_errors or any(copy.previous is not None for copy in plan.alternates)
         ):
-            raise ValueError("대체 대상은 새 파일 업로드에만 사용할 수 있습니다.")
+            raise ValueError(
+                "대체 대상은 업로드나 복제 부족 해결에서 새 파일을 만들 때만 사용할 수 있습니다."
+            )
         changes = [copy.target for copy in (*plan.copies, *plan.alternates)] + list(plan.mkdirs)
         changes += [item.endpoint for item in (*plan.deletions, *plan.rmdirs)]
         changes += [item.source.endpoint for item in plan.renames]
@@ -1185,7 +1200,7 @@ class OperationEngine:
                     return self._execute(selected, context, held, replaced_targets)
             return self._execute(selected, context, held, replaced_targets)
 
-    def _reserve_upload(self, plan, context, held):
+    def _reserve_with_alternates(self, plan, context, held):
         copies, candidates = list(plan.copies), list(plan.alternates)
         replaced_targets = {}
         ordered = sorted(enumerate(copies), key=lambda item: item[1].target.account_id)
@@ -1251,7 +1266,7 @@ class OperationEngine:
         held = {}
         try:
             if plan.alternates:
-                plan, replaced_targets = self._reserve_upload(plan, context, held)
+                plan, replaced_targets = self._reserve_with_alternates(plan, context, held)
             else:
                 replaced_targets = {}
                 for index, (account_id, size) in enumerate(sorted(amounts.items()), 1):

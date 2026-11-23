@@ -24,14 +24,19 @@ from cloud_cluster.transfers import TaskContext, TransferTask
             StepResult("alt", "file.txt", "대체 업로드", "ok", "Box · 파일 크기 제한 초과"),
             "대체 업로드 완료 · 다른 계정 · Box · 파일 크기 제한 초과 · /file.txt",
         ),
+        (
+            StepResult("alt", "file.txt", "대체 복제", "ok", "Box · 파일 크기 제한 초과"),
+            "대체 복제 완료 · 다른 계정 · Box · 파일 크기 제한 초과 · /file.txt",
+        ),
     ],
 )
-def test_upload_task_row_keeps_failure_or_fallback_reason(qtbot, tmp_path, step, expected):
+def test_transfer_task_row_keeps_failure_or_fallback_reason(qtbot, tmp_path, step, expected):
     window = MainWindow(None, Settings(), SettingsStore(tmp_path / "ui"))
     qtbot.addWidget(window)
     window.settings.accounts = [CloudAccount("alt", "다른 계정", "drive")]
-    result = OperationResult("파일 업로드", (step,))
-    task = TransferTask("upload", result.label, TaskContext(), state=result.outcome, result=result)
+    label = "추천 계정으로 복제" if step.action == "대체 복제" else "파일 업로드"
+    result = OperationResult(label, (step,))
+    task = TransferTask("transfer", label, TaskContext(), state=result.outcome, result=result)
     window.transfers.tasks[task.id] = task
     try:
         window.update_task(task)
