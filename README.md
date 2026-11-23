@@ -52,7 +52,10 @@ Cloud Cluster는 여러 클라우드 계정을 하나로 묶어서 관리할 수
 
 ## 소스 실행과 Windows 빌드
 
-일반 Windows CPython 3.15.2와 uv를 사용합니다. DLL을 빌드하려면 Go 1.27.4와 MinGW GCC가 필요합니다.
+일반 Windows CPython 3.15.2와 uv를 사용합니다. DLL을 빌드하려면 Go 1.27.4와 MSYS2 UCRT64 GCC가 필요합니다.
+MSYS2 UCRT64 터미널에서 `pacman -S mingw-w64-ucrt-x86_64-gcc`로 GCC를 설치합니다.
+빌드 스크립트는 `C:\msys64\ucrt64\bin\gcc.exe`를 기본으로 사용합니다. 다른 경로에 설치했다면
+`-Compiler`에 `gcc.exe`의 전체 경로를 지정합니다.
 첫 빌드는 공개 패키지와 rclone 소스를 내려받습니다.
 
 ```powershell

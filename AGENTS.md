@@ -610,8 +610,11 @@
   `__main__.py`를 직접 넘기면 진입점 지정 방식에 대한 경고가 나온다.
   onefile이 앱의 import를 따라가며, `--include-package=cloud_cluster`를 함께 지정하면
   이미 포함된 진입점을 다시 포함하려 한다는 경고가 나온다.
-- 앱 패키징은 Zig, Go DLL 빌드는 MinGW를 사용한다. Nuitka의 Python 3.15 패키징에
-  MinGW를 적용하면 실패했다. Python 3.15 지원은 실험적이므로 컴파일 성공만으로 끝내지 않는다.
+- 앱 패키징은 Zig, Go DLL 빌드는 MSYS2 UCRT64 GCC를 기본으로 사용한다. MSYS2가 MINGW64를
+  단계적으로 폐지하고 UCRT64로 이전을 권고해 DLL 빌드 기본 경로를 바꿨다. `gcc.exe`를 절대 경로로
+  호출해도 `cc1.exe`가 의존 DLL을 찾으려면 같은 `bin` 경로가 필요하다. `go`를 먼저 찾은 뒤 빌드 중에만
+  컴파일러 폴더를 `PATH` 앞에 둔다. Nuitka의 Python 3.15 패키징에 MinGW를 적용하면 실패했다.
+  Python 3.15 지원은 실험적이므로 컴파일 성공만으로 끝내지 않는다.
 - 번역 파일 조회의 `python -c` 인자는 PowerShell에서 큰따옴표로 감싸고 Python 파일명에는
   작은따옴표를 쓴다. Windows PowerShell 5.1의 네이티브 인자 전달은 내부 큰따옴표를 제거해
   파일이 있어도 `NameError`로 패키징을 중단시킨다.

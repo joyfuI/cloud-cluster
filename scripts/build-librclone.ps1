@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$SourceDir, [string]$Compiler = 'C:\msys64\mingw64\bin\gcc.exe')
+param([string]$SourceDir, [string]$Compiler = 'C:\msys64\ucrt64\bin\gcc.exe')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $tag = 'v1.76.0'
@@ -13,6 +13,8 @@ $SourceDir = (Resolve-Path -LiteralPath $SourceDir).Path
 $actual = git -C $SourceDir rev-parse HEAD
 if ($LASTEXITCODE -or $actual -ne $commit) { throw 'Pinned rclone source commit does not match' }
 if (-not (Test-Path -LiteralPath $Compiler)) { throw 'Install a MinGW-compatible GCC compiler first' }
+$Compiler = (Resolve-Path -LiteralPath $Compiler).Path
+$goCommand = Get-Command go
 $nativeDir = Join-Path $projectRoot 'src\cloud_cluster\_native'
 $cacheDir = Join-Path $projectRoot 'build\go-cache'
 $moduleDir = Join-Path $projectRoot 'build\go-mod'
@@ -27,11 +29,14 @@ $env:GOARCH = 'amd64'
 $env:CC = $Compiler
 $env:GOCACHE = $cacheDir
 $env:GOMODCACHE = $moduleDir
+$compilerDir = Split-Path -Parent $Compiler
+$previousPath = $env:PATH
 Push-Location $SourceDir
 try {
-    go build -p 4 -overlay $overlayPath -buildmode=c-shared -trimpath "-ldflags=-s -w -X github.com/rclone/rclone/fs.Version=$tag" -o (Join-Path $nativeDir 'librclone.dll') ./librclone
+    $env:PATH = "$compilerDir$([IO.Path]::PathSeparator)$previousPath"
+    & $goCommand build -p 4 -overlay $overlayPath -buildmode=c-shared -trimpath "-ldflags=-s -w -X github.com/rclone/rclone/fs.Version=$tag" -o (Join-Path $nativeDir 'librclone.dll') ./librclone
     if ($LASTEXITCODE) { throw 'librclone build failed' }
-    $modules = go version -m (Join-Path $nativeDir 'librclone.dll')
+    $modules = & $goCommand version -m (Join-Path $nativeDir 'librclone.dll')
     if ($LASTEXITCODE) { throw 'Go module manifest failed' }
     $dllHash = (Get-FileHash -LiteralPath (Join-Path $nativeDir 'librclone.dll') -Algorithm SHA256).Hash
     $licenseDir = Join-Path $projectRoot "build\rclone-licenses\$dllHash"
@@ -49,7 +54,10 @@ try {
             Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
         }
     }
-    $info = [ordered]@{ rclone=$tag; commit=$actual; go=(go version); gcc=(& $Compiler --version | Select-Object -First 1); sha256=$dllHash }
+    $info = [ordered]@{ rclone=$tag; commit=$actual; go=(& $goCommand version); gcc=(& $Compiler --version | Select-Object -First 1); sha256=$dllHash }
     $info | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $nativeDir 'build-info.json') -Encoding utf8
     $info | ConvertTo-Json
-} finally { Pop-Location }
+} finally {
+    $env:PATH = $previousPath
+    Pop-Location
+}
